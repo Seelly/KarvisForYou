@@ -6,6 +6,12 @@ KarvisForAll 统一配置
 """
 import os
 
+
+def _env_int(key: str, default: int = 0) -> int:
+    """读取环境变量并转为 int，空串视为未设置，回退到 default。"""
+    val = os.environ.get(key, "")
+    return int(val) if val.strip() else default
+
 # ============ DeepSeek API (Tier 2/3: Main + Think) ============
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
@@ -21,7 +27,7 @@ QWEN_VL_MODEL = os.environ.get("QWEN_VL_MODEL", "qwen-vl-max")
 
 # ============ 企业微信（WeWork 应用） ============
 CORP_ID = os.environ.get("WEWORK_CORP_ID", "")
-AGENT_ID = int(os.environ.get("WEWORK_AGENT_ID", "0"))
+AGENT_ID = _env_int("WEWORK_AGENT_ID", 0)
 CORP_SECRET = os.environ.get("WEWORK_CORP_SECRET", "")
 WEWORK_TOKEN = os.environ.get("WEWORK_TOKEN", "")
 ENCODING_AES_KEY = os.environ.get("WEWORK_ENCODING_AES_KEY", "")
@@ -50,14 +56,14 @@ COMPANION_RECENT_HOURS = 2
 
 # ============ Web / 管理员 ============
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
-WEB_TOKEN_EXPIRE_HOURS = int(os.environ.get("WEB_TOKEN_EXPIRE_HOURS", "24"))
+WEB_TOKEN_EXPIRE_HOURS = _env_int("WEB_TOKEN_EXPIRE_HOURS", 24)
 ADMIN_USER_ID = os.environ.get("ADMIN_WEWORK_USER_ID", os.environ.get("ADMIN_USER_ID", ""))  # 企微管理员 user_id（向后兼容 ADMIN_USER_ID）
 ADMIN_WEWORK_USER_ID = ADMIN_USER_ID  # 别名
 
 # ============ 告警阈值 ============
-ALERT_SLOW_THRESHOLD = int(os.environ.get("ALERT_SLOW_THRESHOLD", "20"))     # 慢请求告警阈值(秒)
-ALERT_SLOW_CONSECUTIVE = int(os.environ.get("ALERT_SLOW_CONSECUTIVE", "3"))  # 连续慢请求才告警
-ALERT_COOLDOWN_SECONDS = int(os.environ.get("ALERT_COOLDOWN_SECONDS", "300"))  # 同类告警冷却(秒)
+ALERT_SLOW_THRESHOLD = _env_int("ALERT_SLOW_THRESHOLD", 20)     # 慢请求告警阈值(秒)
+ALERT_SLOW_CONSECUTIVE = _env_int("ALERT_SLOW_CONSECUTIVE", 3)  # 连续慢请求才告警
+ALERT_COOLDOWN_SECONDS = _env_int("ALERT_COOLDOWN_SECONDS", 300)  # 同类告警冷却(秒)
 
 # ============ V8: 智能调度引擎 ============
 SCHEDULER_TICK_MINUTES = 30       # 心跳评估间隔（分钟）
@@ -72,7 +78,7 @@ SCHEDULER_MIN_PUSH_GAP = 30       # 两次推送最小间隔（分钟）
 LOG_FILE_KARVISFORALL = os.environ.get("LOG_FILE_KARVISFORALL", "/root/KarvisForAll/logs/app.log")
 
 # ============ 服务端口 ============
-SERVER_PORT = int(os.environ.get("SERVER_PORT", "9000"))
+SERVER_PORT = _env_int("SERVER_PORT", 9000)
 
 # ============ 深度自问（Reflect） ============
 REFLECT_COOLDOWN_DAYS = 90       # 同一问题最少间隔天数
