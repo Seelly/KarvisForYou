@@ -115,7 +115,7 @@ brain.process()
 ### 准备工作
 
 1. **大模型 API Key**：推荐 [腾讯云知识引擎 lkeap](https://console.cloud.tencent.com/lkeap)（国内网络稳定，无需翻墙，开通即用，充值 10 元即可）；也支持 [DeepSeek 官方](https://platform.deepseek.com/) 或任何兼容 OpenAI API 的平台
-2. **企业微信应用**：https://work.weixin.qq.com/ 注册企业 → 创建应用 → 记下 Corp ID / AgentId / Secret / Token / EncodingAESKey
+2. **企业微信应用**：https://work.weixin.qq.com/ 注册企业 → 创建应用 → 记下 Corp ID / AgentId / Secret / Token / EncodingAESKey（[企微应用配置指南 →](docs/企微应用配置指南.md)）
 3. **服务器**：腾讯云轻量 1C1G 即可，或本地电脑先体验
 
 ### 部署方式一：一键脚本
