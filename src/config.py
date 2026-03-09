@@ -51,7 +51,8 @@ COMPANION_RECENT_HOURS = 2
 # ============ Web / 管理员 ============
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 WEB_TOKEN_EXPIRE_HOURS = int(os.environ.get("WEB_TOKEN_EXPIRE_HOURS", "24"))
-ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")  # 管理员企微 user_id，用于告警推送
+ADMIN_USER_ID = os.environ.get("ADMIN_WEWORK_USER_ID", os.environ.get("ADMIN_USER_ID", ""))  # 企微管理员 user_id（向后兼容 ADMIN_USER_ID）
+ADMIN_WEWORK_USER_ID = ADMIN_USER_ID  # 别名
 
 # ============ 告警阈值 ============
 ALERT_SLOW_THRESHOLD = int(os.environ.get("ALERT_SLOW_THRESHOLD", "20"))     # 慢请求告警阈值(秒)
@@ -81,9 +82,21 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
 TELEGRAM_ADMIN_CHAT_ID = os.environ.get("TELEGRAM_ADMIN_CHAT_ID", "")
 
+# ============ 飞书 Bot ============
+FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
+FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
+FEISHU_ADMIN_OPEN_ID = os.environ.get("FEISHU_ADMIN_OPEN_ID", "")  # 管理员飞书 open_id，用于告警推送
+FEISHU_ADMIN_USER_ID = FEISHU_ADMIN_OPEN_ID  # 别名，供 channel/feishu.py 使用
+
+# ============ 飞书云空间（Drive）============
+# storage_mode=feishu 时使用；可复用飞书 Bot 的 App ID / App Secret
+# root_folder_token: 飞书云空间中作为数据根目录的文件夹 token
+FEISHU_DRIVE_ROOT_FOLDER_TOKEN = os.environ.get("FEISHU_DRIVE_ROOT_FOLDER_TOKEN", "")
+
 # ============ 渠道控制 ============
-# 可选值: "wework", "telegram", "wework,telegram"
-ACTIVE_CHANNELS = [c.strip() for c in os.environ.get("ACTIVE_CHANNELS", "wework").split(",") if c.strip()]
+# 可选值: "wework", "telegram", "feishu", 多个用逗号分隔
+# 默认不启用任何渠道，运营者需显式配置
+ACTIVE_CHANNELS = [c.strip() for c in os.environ.get("ACTIVE_CHANNELS", "").split(",") if c.strip()]
 
 # Telegram API 代理地址（国内服务器需要反代）
 TELEGRAM_API_BASE = os.environ.get("TELEGRAM_API_BASE", "https://api.telegram.org")

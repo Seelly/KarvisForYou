@@ -14,13 +14,11 @@ Skill: internal_ops (V3-F10)
 - 写操作不在此模块（Agent Loop 的写操作需另外确认）
 - 每次读取限制返回内容长度
 """
-import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+from log_utils import BEIJING_TZ, get_logger
 
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def read_files(params, state, ctx):
@@ -44,7 +42,7 @@ def read_files(params, state, ctx):
     for p in paths[:5]:  # 最多 5 个文件
         if p.startswith("/"):
             if not p.startswith(ctx.base_dir):
-                _log(f"[internal_ops] 安全拒绝: {p}")
+                logger.warning("安全拒绝: %s", p)
                 continue
             full_paths.append(p)
         else:
@@ -57,7 +55,8 @@ def read_files(params, state, ctx):
     try:
         from brain import _executor
         executor = _executor
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to import brain executor, using fallback: %s", e)
         executor = ThreadPoolExecutor(max_workers=4)
 
     futures = {p: executor.submit(ctx.IO.read_text, p) for p in full_paths}
@@ -73,7 +72,7 @@ def read_files(params, state, ctx):
         except Exception as e:
             results[p] = f"读取失败: {e}"
 
-    _log(f"[internal_ops] 读取 {len(results)} 个文件")
+    logger.info("读取 %s 个文件", len(results))
 
     # 返回 agent_context（供 Agent Loop 使用）
     return {
@@ -106,7 +105,8 @@ def search_files(params, state, ctx):
     try:
         from brain import _executor
         executor = _executor
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to import brain executor, using fallback: %s", e)
         executor = ThreadPoolExecutor(max_workers=6)
 
     files_to_read = {}
@@ -127,7 +127,8 @@ def search_files(params, state, ctx):
     for k, fut in futures.items():
         try:
             results_text[k] = fut.result(timeout=15) or ""
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to get future result: %s", e)
             results_text[k] = ""
 
     # 搜索匹配
@@ -146,7 +147,7 @@ def search_files(params, state, ctx):
         if len(matches) >= max_results:
             break
 
-    _log(f"[internal_ops] 搜索完成: {len(matches)} 条匹配")
+    logger.info("搜索完成: %s 条匹配", len(matches))
 
     return {
         "success": True,
@@ -192,7 +193,7 @@ def list_files(params, state, ctx):
             "agent_context": {"directory": full_path, "files": file_list}
         }
     except Exception as e:
-        _log(f"[internal_ops] list 异常: {e}")
+        logger.exception("list 异常: %s", e)
         return {"success": False, "reply": f"目录读取异常: {e}"}
 
 

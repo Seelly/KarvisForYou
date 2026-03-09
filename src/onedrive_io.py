@@ -12,16 +12,15 @@ import time
 import json
 import hashlib
 import threading
+from datetime import datetime
+
 import requests
 from requests.adapters import HTTPAdapter
 
-import sys
-from datetime import datetime, timezone, timedelta as _td
-_BEIJING_TZ = timezone(_td(hours=8))
+from log_utils import BEIJING_TZ, get_logger
+from storage_base import StorageBackend
 
-def _log(msg):
-    ts = datetime.now(_BEIJING_TZ).strftime("%H:%M:%S")
-    print(f"{ts} {msg}", file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 # 全局 Session：所有 OneDriveIO 实例共享 TCP 连接池
@@ -40,10 +39,10 @@ _auth_session = requests.Session()
 _DISK_CACHE_DIR = "/tmp/karvis_od_cache"
 
 
-class OneDriveIO:
+class OneDriveIO(StorageBackend):
     """OneDrive 统一读写，每用户一个实例，持有独立凭证。
 
-    与 LocalFileIO 接口一致（Duck Typing），上层代码无感知切换。
+    继承 StorageBackend 抽象协议，上层代码无感知切换。
     """
 
     def __init__(self, onedrive_config: dict):
@@ -84,7 +83,8 @@ class OneDriveIO:
                 if time.time() - mtime < self._mem_cache_ttl * 2:
                     with open(disk_path, "r", encoding="utf-8") as f:
                         return f.read(), True
-        except Exception:
+        except Exception as e:
+            logger.debug("读取磁盘缓存失败: %s", e)
             pass
         return None, False
 
@@ -95,7 +95,8 @@ class OneDriveIO:
             disk_path = os.path.join(_DISK_CACHE_DIR, key)
             with open(disk_path, "w", encoding="utf-8") as f:
                 f.write(data)
-        except Exception:
+        except Exception as e:
+            logger.debug("写入磁盘缓存失败: %s", e)
             pass
 
     def _invalidate_cache(self, path: str):
@@ -105,7 +106,8 @@ class OneDriveIO:
             disk_path = os.path.join(_DISK_CACHE_DIR, key)
             if os.path.exists(disk_path):
                 os.remove(disk_path)
-        except Exception:
+        except Exception as e:
+            logger.debug("清除磁盘缓存文件失败: %s", e)
             pass
 
     # ================================================================
@@ -123,7 +125,7 @@ class OneDriveIO:
             if self._token_cache["token"] and self._token_cache["expire_time"] > now:
                 return self._token_cache["token"]
 
-            _log("[OneDrive] 开始刷新 token...")
+            logger.info("[OneDrive] 开始刷新 token...")
             t0 = time.time()
             url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
             data = {
@@ -144,11 +146,11 @@ class OneDriveIO:
                         "token": token,
                         "expire_time": now + expires_in - 120
                     }
-                    _log(f"[OneDrive] token 刷新成功: {t1-t0:.1f}s")
+                    logger.info("[OneDrive] token 刷新成功: %.1fs", t1 - t0)
                     return token
-                _log(f"[OneDrive] token 获取失败({t1-t0:.1f}s): {result}")
+                logger.error("[OneDrive] token 获取失败(%.1fs): %s", t1 - t0, result)
             except Exception as e:
-                _log(f"[OneDrive] token 请求异常({time.time()-t0:.1f}s): {e}")
+                logger.error("[OneDrive] token 请求异常(%.1fs): %s", time.time() - t0, e)
             return None
 
     # ================================================================
@@ -182,22 +184,22 @@ class OneDriveIO:
                 resp = _graph_session.get(url, headers=headers, timeout=(5, 10))
                 elapsed = time.time() - t0
                 if resp.status_code == 200:
-                    _log(f"[OneDrive] 读取OK {file_path}: {elapsed:.1f}s")
+                    logger.info("[OneDrive] 读取OK %s: %.1fs", file_path, elapsed)
                     text = resp.text
                     self._put_mem_cache(file_path, text)
                     self._put_disk_cache(file_path, text)
                     return text
                 elif resp.status_code == 404:
                     return ""
-                _log(f"[OneDrive] 读取失败 {file_path}: {resp.status_code} ({elapsed:.1f}s)")
+                logger.warning("[OneDrive] 读取失败 %s: %s (%.1fs)", file_path, resp.status_code, elapsed)
                 return None
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, ConnectionError):
-                _log(f"[OneDrive] 读取超时(第{attempt}次) {file_path}: {time.time()-t0:.1f}s")
+                logger.warning("[OneDrive] 读取超时(第%d次) %s: %.1fs", attempt, file_path, time.time() - t0)
                 if attempt < _retries:
                     continue
                 return None
             except Exception as e:
-                _log(f"[OneDrive] 读取异常 {file_path}: {e}")
+                logger.error("[OneDrive] 读取异常 %s: %s", file_path, e)
                 return None
 
     def write_text(self, file_path, content, _retries=3):
@@ -218,19 +220,19 @@ class OneDriveIO:
                 elapsed = time.time() - t0
                 ok = resp.status_code in (200, 201)
                 if ok:
-                    _log(f"[OneDrive] 写入OK {file_path}: {elapsed:.1f}s")
+                    logger.info("[OneDrive] 写入OK %s: %.1fs", file_path, elapsed)
                     self._put_mem_cache(file_path, content)
                     self._put_disk_cache(file_path, content)
                 else:
-                    _log(f"[OneDrive] 写入失败 {file_path}: {resp.status_code} ({elapsed:.1f}s)")
+                    logger.warning("[OneDrive] 写入失败 %s: %s (%.1fs)", file_path, resp.status_code, elapsed)
                 return ok
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, ConnectionError):
-                _log(f"[OneDrive] 写入超时(第{attempt}次) {file_path}: {time.time()-t0:.1f}s")
+                logger.warning("[OneDrive] 写入超时(第%d次) %s: %.1fs", attempt, file_path, time.time() - t0)
                 if attempt < _retries:
                     continue
                 return False
             except Exception as e:
-                _log(f"[OneDrive] 写入异常 {file_path}: {e}")
+                logger.error("[OneDrive] 写入异常 %s: %s", file_path, e)
                 return False
 
     # ================================================================
@@ -247,7 +249,7 @@ class OneDriveIO:
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            _log(f"[OneDrive] JSON 解析失败 {file_path}: {e}")
+            logger.error("[OneDrive] JSON 解析失败 %s: %s", file_path, e)
             return None
 
     def write_json(self, file_path, data):
@@ -287,8 +289,6 @@ class OneDriveIO:
 
     def append_to_quick_notes(self, file_path, message):
         """追加一条笔记到 Quick-Notes，格式化为 ## 时间戳 + 内容"""
-        from datetime import datetime, timezone, timedelta
-
         existing = self.read_text(file_path)
         if existing is None:
             return False
@@ -303,12 +303,11 @@ class OneDriveIO:
             if len(lines) >= 2:
                 content_lines = '\n'.join(lines[1:]).strip().rstrip('-').strip()
                 if content_lines == message.strip():
-                    _log(f"[OneDrive] Quick-Notes 内容重复，跳过: {message[:30]}...")
+                    logger.info("[OneDrive] Quick-Notes 内容重复，跳过: %s...", message[:30])
                     return True
 
         # 追加新条目
-        beijing_tz = timezone(timedelta(hours=8))
-        now = datetime.now(beijing_tz).strftime("%Y-%m-%d %H:%M")
+        now = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
         new_entry = f"## {now}\n\n{message}\n\n---\n\n"
 
         lines = existing.split('\n')
@@ -341,20 +340,20 @@ class OneDriveIO:
                 elapsed = time.time() - t0
                 if resp.status_code == 200:
                     items = resp.json().get("value", [])
-                    _log(f"[OneDrive] 列目录OK {folder_path}: {len(items)}项 ({elapsed:.1f}s)")
+                    logger.info("[OneDrive] 列目录OK %s: %d项 (%.1fs)", folder_path, len(items), elapsed)
                     return items
                 elif resp.status_code == 404:
-                    _log(f"[OneDrive] 目录不存在 {folder_path}")
+                    logger.warning("[OneDrive] 目录不存在 %s", folder_path)
                     return []
-                _log(f"[OneDrive] 列目录失败 {folder_path}: {resp.status_code} ({elapsed:.1f}s)")
+                logger.warning("[OneDrive] 列目录失败 %s: %s (%.1fs)", folder_path, resp.status_code, elapsed)
                 return None
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, ConnectionError):
-                _log(f"[OneDrive] 列目录超时(第{attempt}次) {folder_path}: {time.time()-t0:.1f}s")
+                logger.warning("[OneDrive] 列目录超时(第%d次) %s: %.1fs", attempt, folder_path, time.time() - t0)
                 if attempt < _retries:
                     continue
                 return None
             except Exception as e:
-                _log(f"[OneDrive] 列目录异常 {folder_path}: {e}")
+                logger.error("[OneDrive] 列目录异常 %s: %s", folder_path, e)
                 return None
 
     # ================================================================
@@ -374,20 +373,20 @@ class OneDriveIO:
                 resp = _graph_session.get(url, headers=headers, timeout=(5, 30))
                 elapsed = time.time() - t0
                 if resp.status_code == 200:
-                    _log(f"[OneDrive] 下载OK {file_path}: {len(resp.content)}B ({elapsed:.1f}s)")
+                    logger.info("[OneDrive] 下载OK %s: %dB (%.1fs)", file_path, len(resp.content), elapsed)
                     return resp.content
                 elif resp.status_code == 404:
-                    _log(f"[OneDrive] 文件不存在 {file_path}")
+                    logger.warning("[OneDrive] 文件不存在 %s", file_path)
                     return None
-                _log(f"[OneDrive] 下载失败 {file_path}: {resp.status_code} ({elapsed:.1f}s)")
+                logger.warning("[OneDrive] 下载失败 %s: %s (%.1fs)", file_path, resp.status_code, elapsed)
                 return None
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, ConnectionError):
-                _log(f"[OneDrive] 下载超时(第{attempt}次) {file_path}: {time.time()-t0:.1f}s")
+                logger.warning("[OneDrive] 下载超时(第%d次) %s: %.1fs", attempt, file_path, time.time() - t0)
                 if attempt < _retries:
                     continue
                 return None
             except Exception as e:
-                _log(f"[OneDrive] 下载异常 {file_path}: {e}")
+                logger.error("[OneDrive] 下载异常 %s: %s", file_path, e)
                 return None
 
     # ================================================================
@@ -407,21 +406,21 @@ class OneDriveIO:
                 resp = _graph_session.delete(url, headers=headers, timeout=(5, 10))
                 elapsed = time.time() - t0
                 if resp.status_code in (200, 204):
-                    _log(f"[OneDrive] 删除OK {file_path} ({elapsed:.1f}s)")
+                    logger.info("[OneDrive] 删除OK %s (%.1fs)", file_path, elapsed)
                     self._invalidate_cache(file_path)
                     return True
                 elif resp.status_code == 404:
-                    _log(f"[OneDrive] 删除目标不存在 {file_path}")
+                    logger.warning("[OneDrive] 删除目标不存在 %s", file_path)
                     return True
-                _log(f"[OneDrive] 删除失败 {file_path}: {resp.status_code} ({elapsed:.1f}s)")
+                logger.warning("[OneDrive] 删除失败 %s: %s (%.1fs)", file_path, resp.status_code, elapsed)
                 return False
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, ConnectionError):
-                _log(f"[OneDrive] 删除超时(第{attempt}次) {file_path}: {time.time()-t0:.1f}s")
+                logger.warning("[OneDrive] 删除超时(第%d次) %s: %.1fs", attempt, file_path, time.time() - t0)
                 if attempt < _retries:
                     continue
                 return False
             except Exception as e:
-                _log(f"[OneDrive] 删除异常 {file_path}: {e}")
+                logger.error("[OneDrive] 删除异常 %s: %s", file_path, e)
                 return False
 
     # ================================================================
@@ -441,7 +440,7 @@ class OneDriveIO:
             token = self.get_token()
             if not token:
                 if attempt < _retries:
-                    _log(f"[OneDrive] 上传token获取失败(第{attempt}次)，{2*attempt}s后重试")
+                    logger.warning("[OneDrive] 上传token获取失败(第%d次)，%ds后重试", attempt, 2 * attempt)
                     time.sleep(2 * attempt)
                     continue
                 return False
@@ -454,7 +453,7 @@ class OneDriveIO:
                 t0 = time.time()
                 resp = _graph_session.put(url, headers=headers, data=data, timeout=60)
                 ok = resp.status_code in (200, 201)
-                _log(f"[OneDrive] 上传 {file_path} size={len(data)} status={resp.status_code} ({time.time()-t0:.1f}s)")
+                logger.info("[OneDrive] 上传 %s size=%d status=%s (%.1fs)", file_path, len(data), resp.status_code, time.time() - t0)
                 if ok:
                     return True
                 # 401 token 过期，清缓存重试
@@ -464,13 +463,13 @@ class OneDriveIO:
                         continue
                 return False
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
-                _log(f"[OneDrive] 上传超时(第{attempt}次) {file_path}: {time.time()-t0:.1f}s")
+                logger.warning("[OneDrive] 上传超时(第%d次) %s: %.1fs", attempt, file_path, time.time() - t0)
                 if attempt < _retries:
                     time.sleep(2 * attempt)
                     continue
                 return False
             except Exception as e:
-                _log(f"[OneDrive] 上传异常 {file_path}: {e}")
+                logger.error("[OneDrive] 上传异常 %s: %s", file_path, e)
                 return False
         return False
 
@@ -489,18 +488,18 @@ class OneDriveIO:
         try:
             resp = _graph_session.post(url, headers=headers, json=body, timeout=30)
             if resp.status_code != 200:
-                _log(f"[OneDrive] 创建上传会话失败: {resp.status_code}")
+                logger.error("[OneDrive] 创建上传会话失败: %s", resp.status_code)
                 return False
             upload_url = resp.json().get("uploadUrl")
             if not upload_url:
                 return False
         except Exception as e:
-            _log(f"[OneDrive] 创建上传会话异常: {e}")
+            logger.error("[OneDrive] 创建上传会话异常: %s", e)
             return False
 
         chunk_size = 3276800
         total_size = len(data)
-        _log(f"[OneDrive] 分片上传 {file_path} total={total_size}")
+        logger.info("[OneDrive] 分片上传 %s total=%d", file_path, total_size)
 
         for start in range(0, total_size, chunk_size):
             end = min(start + chunk_size, total_size)
@@ -513,11 +512,11 @@ class OneDriveIO:
                 resp = requests.put(upload_url, headers=chunk_headers,
                                     data=chunk, timeout=60)
                 if resp.status_code not in (200, 201, 202):
-                    _log(f"[OneDrive] 分片失败: {resp.status_code}")
+                    logger.error("[OneDrive] 分片失败: %s", resp.status_code)
                     return False
             except Exception as e:
-                _log(f"[OneDrive] 分片异常: {e}")
+                logger.error("[OneDrive] 分片异常: %s", e)
                 return False
 
-        _log(f"[OneDrive] 分片上传完成: {file_path}")
+        logger.info("[OneDrive] 分片上传完成: %s", file_path)
         return True

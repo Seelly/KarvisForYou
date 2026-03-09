@@ -3,10 +3,9 @@
 KarvisForAll 对话式设置
 通过自然语言设置昵称、AI 风格、个人信息。
 """
-import sys
+from log_utils import get_logger
 
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def set_nickname(params, state, ctx):
@@ -28,7 +27,7 @@ def set_nickname(params, state, ctx):
     from user_context import update_user_nickname
     update_user_nickname(ctx.user_id, nickname)
 
-    _log(f"[Settings] 用户 {ctx.user_id} 设置昵称: {nickname}")
+    logger.info("用户 %s 设置昵称: %s", ctx.user_id, nickname)
 
     return {
         "success": True,
@@ -56,7 +55,7 @@ def set_ai_name(params, state, ctx):
     config["ai_name"] = ai_name
     ctx.save_user_config(config)
 
-    _log(f"[Settings] 用户 {ctx.user_id} 给AI起名: {ai_name}")
+    logger.info("用户 %s 给AI起名: %s", ctx.user_id, ai_name)
 
     return {
         "success": True,
@@ -84,7 +83,7 @@ def set_soul(params, state, ctx):
     if mode == "reset":
         config["soul_override"] = ""
         ctx.save_user_config(config)
-        _log(f"[Settings] 用户 {ctx.user_id} 重置风格")
+        logger.info("用户 %s 重置风格", ctx.user_id)
         return {
             "success": True,
             "reply": "已恢复默认风格~"
@@ -104,7 +103,7 @@ def set_soul(params, state, ctx):
     config["soul_override"] = new_style
     ctx.save_user_config(config)
 
-    _log(f"[Settings] 用户 {ctx.user_id} 设置风格: {new_style}")
+    logger.info("用户 %s 设置风格: %s", ctx.user_id, new_style)
 
     return {
         "success": True,
@@ -141,7 +140,7 @@ def set_info(params, state, ctx):
 
     ctx.save_user_config(config)
 
-    _log(f"[Settings] 用户 {ctx.user_id} 设置信息: {category}={info_text}")
+    logger.info("用户 %s 设置信息: %s=%s", ctx.user_id, category, info_text)
 
     # memory_updates 由 brain 层统一处理写入 memory.md
     return {

@@ -9,11 +9,13 @@ iCost xlsx 文件扫描、解析、去重、合并到 finance_data.json。
 
 V12 移植：handler 签名 (params, state, ctx)，IO 通过 ctx.IO。
 """
-import sys
 import io
 from finance_utils import (
-    load_finance_data, save_finance_data, parse_date, parse_amount, _log
+    load_finance_data, save_finance_data, parse_date, parse_amount
 )
+from log_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 # iCost xlsx 中需要提取的列（按名称匹配，顺序无关）
@@ -134,10 +136,11 @@ def _parse_xlsx_bytes(data_bytes, filename=""):
             records.append(record)
 
         except Exception as e:
-            _log(f"[finance.import] 行 {row_idx} 解析异常: {e}")
+            logger.warning("[finance.import] 行 %s 解析异常: %s", row_idx, e)
             continue
 
-    _log(f"[finance.import] {filename} Sheet「{sheet_name}」解析: {len(records)} 条有效记录")
+    logger.info("[finance.import] %s Sheet「%s」解析: %s 条有效记录",
+                filename, sheet_name, len(records))
     return records, None
 
 
@@ -201,7 +204,7 @@ def _scan_and_import(ctx):
 
         # 检查是否已导入过
         if fname in imported_files:
-            _log(f"[finance.import] 跳过已导入文件: {fname}")
+            logger.info("[finance.import] 跳过已导入文件: %s", fname)
             file_results.append({"file": fname, "status": "skipped", "reason": "已导入过"})
             continue
 
@@ -209,14 +212,14 @@ def _scan_and_import(ctx):
         file_path = f"{ctx.finance_inbox_dir}/{fname}"
         file_bytes = ctx.IO.download_binary(file_path)
         if file_bytes is None:
-            _log(f"[finance.import] 下载失败: {fname}")
+            logger.warning("[finance.import] 下载失败: %s", fname)
             file_results.append({"file": fname, "status": "error", "reason": "下载失败"})
             continue
 
         # 解析 xlsx
         records, error = _parse_xlsx_bytes(file_bytes, fname)
         if error:
-            _log(f"[finance.import] 解析失败 {fname}: {error}")
+            logger.warning("[finance.import] 解析失败 %s: %s", fname, error)
             file_results.append({"file": fname, "status": "error", "reason": error})
             continue
 
@@ -245,7 +248,8 @@ def _scan_and_import(ctx):
             "skipped": skip_count,
             "total_in_file": len(records),
         })
-        _log(f"[finance.import] {fname}: 新增 {new_count} 条, 跳过 {skip_count} 条重复")
+        logger.info("[finance.import] %s: 新增 %s 条, 跳过 %s 条重复",
+                    fname, new_count, skip_count)
 
     # 6. 保存数据
     if total_new > 0:
@@ -278,13 +282,11 @@ def handle_import(params, state, ctx):
 
     params: {} — 无需参数
     """
-    _log("[finance.import] 开始扫描 inbox 目录...")
+    logger.info("[finance.import] 开始扫描 inbox 目录...")
     try:
         return _scan_and_import(ctx)
     except Exception as e:
-        _log(f"[finance.import] 导入异常: {e}")
-        import traceback
-        traceback.print_exc(file=sys.stderr)
+        logger.exception("[finance.import] 导入异常: %s", e)
         return {"success": False, "reply": f"导入过程中出错: {str(e)}"}
 
 

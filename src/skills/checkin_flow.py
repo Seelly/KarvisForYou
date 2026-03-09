@@ -11,15 +11,11 @@ Skill: checkin.*
     checkin_date: str (YYYY-MM-DD)
 """
 import re
-import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
+from log_utils import BEIJING_TZ, get_logger
 
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
-
-
-BEIJING_TZ = timezone(timedelta(hours=8))
+logger = get_logger(__name__)
 
 CHECKIN_QUESTIONS = [
     {"id": "q1", "question": "今天做了什么？", "type": "text"},
@@ -184,7 +180,7 @@ def cancel(params, state, ctx):
         return {"success": True, "reply": "当前没有打卡在进行哦"}
 
     answered = len(state.get("checkin_answers", []))
-    _log(f"[checkin] 取消打卡，已回答 {answered} 题")
+    logger.info("[checkin] 取消打卡，已回答 %d 题", answered)
 
     return {
         "success": True,
@@ -264,7 +260,8 @@ def finish(state, ctx, timeout=False):
             elif (today_dt - last_dt).days > 1:
                 stats["streak"] = 1
             # 同一天重复打卡不改 streak
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to calculate checkin streak: %s", e)
             stats["streak"] = 1
     else:
         stats["streak"] = 1
@@ -288,7 +285,7 @@ def _write_to_daily_note(ctx, file_path, date_str, checkin_content):
     existing = ctx.IO.read_text(file_path)
 
     if existing is None:
-        _log(f"[checkin] 无法读取 Daily Note，尝试创建: {file_path}")
+        logger.warning("[checkin] 无法读取 Daily Note，尝试创建: %s", file_path)
         existing = ""
 
     if existing:
@@ -308,9 +305,9 @@ def _write_to_daily_note(ctx, file_path, date_str, checkin_content):
 
     ok = ctx.IO.write_text(file_path, new_content)
     if ok:
-        _log(f"[checkin] 已写入 Daily Note: {file_path}")
+        logger.info("[checkin] 已写入 Daily Note: %s", file_path)
     else:
-        _log(f"[checkin] 写入 Daily Note 失败: {file_path}")
+        logger.error("[checkin] 写入 Daily Note 失败: %s", file_path)
     return ok
 
 

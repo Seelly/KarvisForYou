@@ -5,14 +5,13 @@ Skill: finance.query
 
 V12 移植：handler 签名 (params, state, ctx)，IO 通过 ctx.IO。
 """
-import sys
 from finance_utils import (
     load_finance_data, filter_bills, summarize_bills,
     resolve_time_range, format_period, parse_amount, parse_date
 )
+from log_utils import get_logger
 
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def handle_query(params, state, ctx):
@@ -108,8 +107,9 @@ def handle_query(params, state, ctx):
     if category:
         agent_ctx["category"] = category
 
-    _log(f"[finance.query] {period} | type={query_type} cat={category} | "
-         f"expense={summary['total_expense']} income={summary['total_income']}")
+    logger.info("[finance.query] %s | type=%s cat=%s | expense=%s income=%s",
+                period, query_type, category,
+                summary['total_expense'], summary['total_income'])
 
     return {"success": True, "agent_context": agent_ctx}
 

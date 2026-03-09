@@ -10,16 +10,12 @@ Skill: mood.generate
 3. 打卡 Q3(纠结) + Q4(念头) 作为高权重信号
 4. 决策日志的 thinking 字段（辅助意图判断）
 """
-import sys
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
+from log_utils import BEIJING_TZ, get_logger
 
-BEIJING_TZ = timezone(timedelta(hours=8))
-
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def execute(params, state, ctx):
@@ -33,13 +29,13 @@ def execute(params, state, ctx):
     if not date_str:
         date_str = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
 
-    _log(f"[mood.generate] 开始生成 {date_str} 情绪日记")
+    logger.info("开始生成 %s 情绪日记", date_str)
 
     # 1. 并发收集当天所有数据
     data = _collect_mood_data(date_str, state, ctx)
 
     if not data["notes"].strip() and not data["checkin"]:
-        _log("[mood.generate] 今天没有记录")
+        logger.info("今天没有记录")
         return {"success": True, "reply": f"今天（{date_str}）还没有记录，无法生成情绪日记"}
 
     # 2. AI 分析情绪
@@ -76,7 +72,7 @@ def execute(params, state, ctx):
     ok = _write_mood_diary(ctx, file_path, date_str, mood_md)
 
     if ok:
-        _log(f"[mood.generate] 情绪日记已写入: {file_path}")
+        logger.info("情绪日记已写入: %s", file_path)
         emoji = analysis.get("mood_emoji", "📝")
         label = analysis.get("mood_label", "")
         score = analysis.get("mood_score", "?")
@@ -113,7 +109,8 @@ def _collect_mood_data(date_str, state, ctx):
     for k, fut in futures.items():
         try:
             results[k] = fut.result(timeout=30) or ""
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to get future result: %s", e)
             results[k] = ""
 
     # 提取当天 Quick-Notes 条目
@@ -181,7 +178,8 @@ def _extract_decision_entries(text, date_str):
             ts = entry.get("ts", "")
             if ts.startswith(date_str):
                 entries.append(entry)
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipping invalid decision log line: %s", e)
             pass
     return entries
 
@@ -280,15 +278,17 @@ def _ai_analyze_mood(data, date_str, call_deepseek, state=None):
         text = "\n".join(lines).strip()
     try:
         return json.loads(text)
-    except Exception:
+    except Exception as e:
+        logger.warning("JSON parse failed, trying extraction: %s", e)
         start = text.find("{")
         end = text.rfind("}")
         if start >= 0 and end > start:
             try:
                 return json.loads(text[start:end + 1])
-            except Exception:
+            except Exception as e:
+                logger.debug("JSON extraction also failed: %s", e)
                 pass
-    _log(f"[mood.generate] AI 分析 JSON 解析失败: {text[:200]}")
+    logger.warning("AI 分析 JSON 解析失败: %s", text[:200])
     return None
 
 
@@ -360,7 +360,8 @@ def _write_mood_diary(ctx, file_path, date_str, mood_content):
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
         weekday = weekdays[dt.weekday()]
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to determine weekday: %s", e)
         weekday = ""
 
     if not existing.strip():

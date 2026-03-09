@@ -23,9 +23,10 @@ import tempfile
 import threading
 import time
 
-# 让 import 能找到 src/
+# 让 import 能找到 src/（直接执行时需要；pytest 通过 pyproject.toml 自动处理）
 _src_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src")
-sys.path.insert(0, _src_dir)
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
 # 使用临时目录作为 DATA_DIR，避免污染真实数据
 _test_data_dir = tempfile.mkdtemp(prefix="karvis_test_")

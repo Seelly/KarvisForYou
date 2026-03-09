@@ -5,19 +5,18 @@
 
 V12 移植：所有 IO 操作通过 ctx.IO + ctx.finance_data_file 进行。
 """
-import sys
 import re
-from datetime import datetime, timezone, timedelta
+import time
+from datetime import datetime, timedelta
 
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+from log_utils import BEIJING_TZ, get_logger
 
-# ---- 北京时区 ----
-_BJ_TZ = timezone(timedelta(hours=8))
+logger = get_logger(__name__)
+
 
 def now_bj():
     """返回北京时间的 datetime"""
-    return datetime.now(_BJ_TZ)
+    return datetime.now(BEIJING_TZ)
 
 # ---- 请求级缓存（同一次调用内复用） ----
 _finance_cache = {"data": None, "ts": 0}
@@ -34,18 +33,17 @@ def load_finance_data(ctx, force=False):
     Returns:
         dict（完整 JSON），失败返回 None
     """
-    import time
     now = time.time()
     if not force and _finance_cache["data"] and (now - _finance_cache["ts"]) < _CACHE_TTL:
         return _finance_cache["data"]
 
-    _log(f"[finance] 读取 {ctx.finance_data_file}")
+    logger.info("[finance] 读取 %s", ctx.finance_data_file)
     data = ctx.IO.read_json(ctx.finance_data_file)
     if data is None:
-        _log("[finance] 读取失败")
+        logger.warning("[finance] 读取失败")
         return None
     if not data:
-        _log("[finance] 文件不存在或为空")
+        logger.info("[finance] 文件不存在或为空")
         return None
 
     _finance_cache["data"] = data
@@ -64,7 +62,6 @@ def save_finance_data(ctx, data):
     ok = ctx.IO.write_json(ctx.finance_data_file, data)
     if ok:
         _finance_cache["data"] = data
-        import time
         _finance_cache["ts"] = time.time()
     return ok
 

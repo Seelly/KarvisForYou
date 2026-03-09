@@ -14,17 +14,13 @@ Skill: monthly.review
 7. state.mood_scores（情绪评分数组）
 8. state.checkin_stats（打卡统计）
 """
-import sys
 import json
 import calendar
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
+from log_utils import BEIJING_TZ, get_logger
 
-BEIJING_TZ = timezone(timedelta(hours=8))
-
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def execute(params, state, ctx):
@@ -47,13 +43,13 @@ def execute(params, state, ctx):
     dates = [f"{year}-{month:02d}-{d:02d}" for d in range(1, days_in_month + 1)]
     period_str = f"{year}年{month}月"
 
-    _log(f"[monthly.review] 生成月报: {period_str} ({days_in_month}天)")
+    logger.info("生成月报: %s (%s天)", period_str, days_in_month)
 
     # 1. 并发收集整月数据
     data = _collect_month_data(dates, month_str, state, ctx)
 
     if not data["notes"].strip():
-        _log("[monthly.review] 本月没有记录")
+        logger.info("本月没有记录")
         return {"success": True, "reply": f"本月（{period_str}）没有记录，无法生成月报"}
 
     # 2. AI 分析
@@ -71,7 +67,7 @@ def execute(params, state, ctx):
     ok = ctx.IO.write_text(file_path, review_md)
 
     if ok:
-        _log(f"[monthly.review] 月报已写入: {file_path}")
+        logger.info("月报已写入: %s", file_path)
         mood_avg = analysis.get("mood_avg", "?")
         insight = analysis.get("insight", "")[:60]
         return {
@@ -109,7 +105,8 @@ def _collect_month_data(dates, month_str, state, ctx):
             # 周报文件名格式：周报-{周一日期}.md
             monday = dt - timedelta(days=dt.weekday())
             week_dates.add(monday.strftime("%Y-%m-%d"))
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipping invalid week date calculation: %s", e)
             pass
     for wd in week_dates:
         files_to_read[f"weekly_{wd}"] = f"{ctx.daily_notes_dir}/周报-{wd}.md"
@@ -127,7 +124,8 @@ def _collect_month_data(dates, month_str, state, ctx):
     for k, fut in futures.items():
         try:
             results[k] = fut.result(timeout=30) or ""
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to get future result: %s", e)
             results[k] = ""
 
     # 组装各天数据（只取有内容的天，做摘要）
@@ -249,7 +247,8 @@ def _extract_decision_stats(text, date_set):
                 skill = entry.get("skill", "unknown")
                 skill_counts[skill] = skill_counts.get(skill, 0) + 1
                 total += 1
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipping invalid decision log line: %s", e)
             pass
     return {"skill_counts": skill_counts, "total_decisions": total}
 
@@ -314,15 +313,17 @@ def _ai_analyze_month(data, period_str, month_str, dates, call_deepseek):
         text = "\n".join(lines).strip()
     try:
         return json.loads(text)
-    except Exception:
+    except Exception as e:
+        logger.warning("JSON parse failed, trying extraction: %s", e)
         start = text.find("{")
         end = text.rfind("}")
         if start >= 0 and end > start:
             try:
                 return json.loads(text[start:end + 1])
-            except Exception:
+            except Exception as e:
+                logger.debug("JSON extraction also failed: %s", e)
                 pass
-    _log(f"[monthly.review] AI 分析 JSON 解析失败: {text[:200]}")
+    logger.warning("AI 分析 JSON 解析失败: %s", text[:200])
     return None
 
 

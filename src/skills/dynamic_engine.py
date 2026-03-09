@@ -18,15 +18,12 @@ Skill: dynamic — 动态能力引擎 (V6)
   - file 操作有目录白名单
   - 单次最多 10 个 action
 """
-import sys
 import copy
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+from log_utils import BEIJING_TZ, get_logger
 
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 # ============ 安全白名单 ============
@@ -243,7 +240,8 @@ def execute(params, state, ctx=None):
         return {"success": False, "reply": "没有指定操作"}
 
     if len(actions) > _MAX_ACTIONS:
-        _log(f"[dynamic] 操作数 {len(actions)} 超过上限 {_MAX_ACTIONS}，截断")
+        logger.warning("[dynamic] 操作数 %d 超过上限 %d，截断",
+                       len(actions), _MAX_ACTIONS)
         actions = actions[:_MAX_ACTIONS]
 
     results = []
@@ -253,7 +251,7 @@ def execute(params, state, ctx=None):
         handler = _OP_HANDLERS.get(op)
         if not handler:
             err = f"未知操作: {op}"
-            _log(f"[dynamic] action[{i}] {err}")
+            logger.warning("[dynamic] action[%d] %s", i, err)
             errors.append(err)
             continue
 
@@ -262,14 +260,15 @@ def execute(params, state, ctx=None):
 
         if not result.get("ok"):
             err = f"{op}({action.get('path', '')}): {result.get('error', '未知错误')}"
-            _log(f"[dynamic] action[{i}] 失败: {err}")
+            logger.error("[dynamic] action[%d] 失败: %s", i, err)
             errors.append(err)
         else:
-            _log(f"[dynamic] action[{i}] OK: {op} → {action.get('path', '')}")
+            logger.info("[dynamic] action[%d] OK: %s -> %s",
+                        i, op, action.get('path', ''))
 
     success = len(errors) == 0
     if not success:
-        _log(f"[dynamic] 执行完成，{len(errors)} 个错误: {errors}")
+        logger.warning("[dynamic] 执行完成，%d 个错误: %s", len(errors), errors)
 
     return {
         "success": success,

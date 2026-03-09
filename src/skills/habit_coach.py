@@ -26,14 +26,11 @@ state.active_experiment 结构：
     "status": "active"
 }
 """
-import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+from log_utils import BEIJING_TZ, get_logger
 
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def propose(params, state, ctx):
@@ -80,7 +77,7 @@ def propose(params, state, ctx):
     }
 
     state["active_experiment"] = experiment
-    _log(f"[habit_coach] 新实验: {name}, 持续到 {end_date}")
+    logger.info("新实验: %s, 持续到 %s", name, end_date)
 
     triggers_str = "、".join(triggers) if triggers else "无特定触发词"
     reply = (
@@ -186,7 +183,8 @@ def status(params, state, ctx):
         try:
             end_dt = datetime.strptime(end, "%Y-%m-%d").date()
             days_left = max(0, (end_dt - today).days)
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to parse experiment end date: %s", e)
             pass
 
     acceptance_rate = f"{accepted}/{trigger_count}" if trigger_count > 0 else "暂无数据"
@@ -248,7 +246,7 @@ def _archive_experiment(state, reason, result_summary="", is_success=None):
         state["experiment_history"] = history[-10:]
 
     state["active_experiment"] = None
-    _log(f"[habit_coach] 实验归档: {exp.get('name', '?')}, reason={reason}")
+    logger.info("实验归档: %s, reason=%s", exp.get('name', '?'), reason)
 
 
 def get_experiment_summary_for_review(state):
@@ -299,7 +297,8 @@ def check_experiment_expiry(state):
                 f"接受 {tracking.get('accepted_count', 0)} 次\n"
                 f"想总结一下这个实验的效果吗？"
             )
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to check experiment expiry: %s", e)
         pass
     return None
 
@@ -311,7 +310,8 @@ def _days_since(date_str):
         dt = datetime.strptime(date_str, "%Y-%m-%d").date()
         today = datetime.now(BEIJING_TZ).date()
         return max(0, (today - dt).days)
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to calculate days since date: %s", e)
         return 0
 
 
@@ -322,7 +322,8 @@ def _days_until(date_str):
         dt = datetime.strptime(date_str, "%Y-%m-%d").date()
         today = datetime.now(BEIJING_TZ).date()
         return max(0, (dt - today).days)
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to calculate days until date: %s", e)
         return 0
 
 

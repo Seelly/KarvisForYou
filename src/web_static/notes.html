@@ -128,7 +128,7 @@ body {
 
 <div id="empty" class="state-box" style="display:none">
   <div class="icon">📭</div>
-  <div class="msg" id="emptyMsg">还没有速记，去企微聊天记录点吧</div>
+  <div class="msg" id="emptyMsg">还没有速记，去聊天记录点吧</div>
 </div>
 
 <div id="timeline" class="timeline" style="display:none"></div>
@@ -233,7 +233,7 @@ body {
 
       if (!append && notes.length === 0) {
         $empty.style.display = '';
-        $emptyMsg.textContent = currentTab === 'misc' ? '还没有碎碎念' : '还没有速记，去企微聊天记录点吧';
+        $emptyMsg.textContent = currentTab === 'misc' ? '还没有碎碎念' : '还没有速记，去聊天记录点吧';
         $timeline.style.display = 'none';
         $moreBtn.style.display = 'none';
         return;

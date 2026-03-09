@@ -3,15 +3,11 @@
 Skill: media.*
 影视笔记系统：创建影视笔记、添加感想。
 """
-import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
+from log_utils import BEIJING_TZ, get_logger
 
-BEIJING_TZ = timezone(timedelta(hours=8))
-
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def _now_str():
@@ -101,12 +97,12 @@ tags: [影视, {media_type}]
             return {"success": False, "reply": "创建笔记失败"}
 
         _update_media_list(name, director, media_type, year, ctx)
-        _log(f"[media.create] 新建: {name}")
+        logger.info("media.create 新建: %s", name)
     else:
-        _log(f"[media.create] 切换到已有: {name}")
+        logger.info("media.create 切换到已有: %s", name)
         # 文件已存在 + 有感想 → 自动转调 media.thought
         if first_thought:
-            _log(f"[media.create] 已有笔记且携带感想，转调 media.thought")
+            logger.info("media.create 已有笔记且携带感想，转调 media.thought")
             thought_result = thought({"content": first_thought, "media": name}, state, ctx)
             thought_result.setdefault("state_updates", {})["active_media"] = name
             return thought_result
@@ -137,7 +133,7 @@ def thought(params, state, ctx):
     ok = ctx.IO.append_to_section(_media_file(media, ctx), "## 💭 我的感想", entry)
 
     if ok:
-        _log(f"[media.thought] 添加到 {media}")
+        logger.info("media.thought 添加到 %s", media)
         return {"success": True}
     else:
         return {"success": False, "reply": f"写入《{media}》失败"}

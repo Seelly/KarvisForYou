@@ -12,19 +12,18 @@ Skill: reflect.*
     reflect_stats: dict             — 统计信息
 """
 import os
-import sys
 import json
 import random
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
+
 from config import REFLECT_COOLDOWN_DAYS
-from local_io import LocalFileIO as _LocalIO
+from local_io import LocalFileIO
+from log_utils import BEIJING_TZ, get_logger
 
+logger = get_logger(__name__)
 
-BEIJING_TZ = timezone(timedelta(hours=8))
-
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+# LocalFileIO 实例（reflect 数据始终存储在本地）
+_LocalIO = LocalFileIO()
 
 
 def _reflect_dir(ctx):
@@ -297,7 +296,8 @@ def _load_question_history(ctx):
     if text:
         try:
             return json.loads(text)
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to parse question history: %s", e)
             pass
     return {"pushed": []}
 
@@ -324,7 +324,8 @@ def _select_question(state, ctx):
             t = datetime.strptime(today, "%Y-%m-%d")
             if (t - d).days < REFLECT_COOLDOWN_DAYS:
                 cooldown_ids.add(entry.get("qid", ""))
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipping invalid cooldown date entry: %s", e)
             pass
 
     # 统计各维度已回答次数，选择最少的维度优先
@@ -402,7 +403,7 @@ def push(params, state, ctx):
 
     # 打卡冲突检查
     if state.get("checkin_pending"):
-        _log("[reflect.push] checkin_pending=true，跳过")
+        logger.info("checkin_pending=true，跳过")
         return {"success": True, "reply": None}
 
     # 选题
@@ -422,7 +423,7 @@ def push(params, state, ctx):
     history["pushed"] = [e for e in history["pushed"] if e.get("date", "") >= cutoff]
     _save_question_history(history, ctx)
 
-    _log(f"[reflect.push] 推送问题: {qid} ({cat}) — {question[:30]}")
+    logger.info("推送问题: %s (%s) — %s", qid, cat, question[:30])
 
     return {
         "success": True,
@@ -486,7 +487,8 @@ def answer(params, state, ctx):
                 stats["streak_days"] = stats.get("streak_days", 0) + 1
             elif (today_dt - last_dt).days > 1:
                 stats["streak_days"] = 1
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to calculate answer streak: %s", e)
             stats["streak_days"] = 1
     else:
         stats["streak_days"] = 1
@@ -494,7 +496,7 @@ def answer(params, state, ctx):
 
     reply = ai_response or "记下了~"
 
-    _log(f"[reflect.answer] qid={qid}, answer_len={len(answer_text)}")
+    logger.info("qid=%s, answer_len=%d", qid, len(answer_text))
 
     return {
         "success": True,
@@ -539,7 +541,7 @@ def skip(params, state, ctx):
     stats["last_reflect_date"] = today
     stats["streak_days"] = 0
 
-    _log(f"[reflect.skip] qid={qid}")
+    logger.info("qid=%s", qid)
 
     return {
         "success": True,
@@ -578,7 +580,8 @@ def history(params, state, ctx):
             entry = json.loads(line)
             if entry.get("date", "") >= cutoff and not entry.get("skipped"):
                 entries.append(entry)
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipping invalid reflect log entry: %s", e)
             pass
 
     if not entries:
@@ -635,7 +638,7 @@ def _generate_response(question, category, answer_text, state):
 
         return response
     except Exception as e:
-        _log(f"[reflect] AI 回应生成失败: {e}")
+        logger.exception("AI 回应生成失败: %s", e)
         return None
 
 
@@ -647,7 +650,7 @@ def _write_log_entry(entry, ctx):
         existing = _LocalIO.read_text(path) or ""
         _LocalIO.write_text(path, existing + line + "\n")
     except Exception as e:
-        _log(f"[reflect] 日志写入失败: {e}")
+        logger.exception("日志写入失败: %s", e)
 
 
 # Skill 热加载注册表

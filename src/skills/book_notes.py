@@ -3,15 +3,11 @@
 Skill: book.*
 读书笔记系统：创建书籍笔记、添加摘录/感想、AI 总结/金句。
 """
-import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
+from log_utils import BEIJING_TZ, get_logger
 
-BEIJING_TZ = timezone(timedelta(hours=8))
-
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def _now_str():
@@ -104,12 +100,12 @@ tags: [读书, {category}]
 
         # 更新书单索引
         _update_book_list(name, author, category, ctx)
-        _log(f"[book.create] 新建: {name}")
+        logger.info("[book.create] 新建: %s", name)
     else:
-        _log(f"[book.create] 切换到已有: {name}")
+        logger.info("[book.create] 切换到已有: %s", name)
         # 文件已存在 + 有感想 → 自动转调 book.thought
         if first_thought:
-            _log(f"[book.create] 已有笔记且携带感想，转调 book.thought")
+            logger.info("[book.create] 已有笔记且携带感想，转调 book.thought")
             thought_result = thought({"content": first_thought, "book": name}, state, ctx)
             thought_result.setdefault("state_updates", {})["active_book"] = name
             return thought_result
@@ -141,7 +137,7 @@ def excerpt(params, state, ctx):
     ok = ctx.IO.append_to_section(_book_file(book, ctx), "## ✂️ 摘录", entry)
 
     if ok:
-        _log(f"[book.excerpt] 添加到 {book}")
+        logger.info("[book.excerpt] 添加到 %s", book)
         return {"success": True}
     else:
         return {"success": False, "reply": f"写入《{book}》失败"}
@@ -167,7 +163,7 @@ def thought(params, state, ctx):
     ok = ctx.IO.append_to_section(_book_file(book, ctx), "## 💡 我的思考", entry)
 
     if ok:
-        _log(f"[book.thought] 添加到 {book}")
+        logger.info("[book.thought] 添加到 %s", book)
         return {"success": True}
     else:
         return {"success": False, "reply": f"写入《{book}》失败"}
@@ -297,13 +293,15 @@ def _parse_json(text):
         text = "\n".join(lines).strip()
     try:
         return json.loads(text)
-    except Exception:
+    except Exception as e:
+        logger.warning("JSON parse failed, trying extraction: %s", e)
         start = text.find("{") if "{" in text else text.find("[")
         end = max(text.rfind("}"), text.rfind("]"))
         if start >= 0 and end > start:
             try:
                 return json.loads(text[start:end + 1])
-            except Exception:
+            except Exception as e:
+                logger.debug("JSON extraction also failed: %s", e)
                 pass
     return None
 

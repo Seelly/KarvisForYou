@@ -5,14 +5,13 @@ Skill: finance.snapshot
 
 V12 移植：handler 签名 (params, state, ctx)，IO 通过 ctx.IO。
 """
-import sys
 from finance_utils import (
     load_finance_data, group_snapshots_by_date,
     calc_snapshot_summary, compare_snapshots, parse_amount
 )
+from log_utils import get_logger
 
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def handle_snapshot(params, state, ctx):
@@ -58,8 +57,9 @@ def handle_snapshot(params, state, ctx):
             "total_snapshots": len(dates),
             **summary,
         }
-        _log(f"[finance.snapshot] summary | date={latest_date} | "
-             f"total={summary['total_assets']} net={summary['net_assets']} illiquid={summary['illiquid_assets']}")
+        logger.info("[finance.snapshot] summary | date=%s | total=%s net=%s illiquid=%s",
+                    latest_date, summary['total_assets'],
+                    summary['net_assets'], summary['illiquid_assets'])
         return {"success": True, "agent_context": agent_ctx}
 
     # ---- compare: 最近两期对比 ----
@@ -84,8 +84,8 @@ def handle_snapshot(params, state, ctx):
             "previous_date": prev_date,
             **comparison,
         }
-        _log(f"[finance.snapshot] compare | {prev_date} → {latest_date} | "
-             f"asset_chg={comparison['asset_change']}")
+        logger.info("[finance.snapshot] compare | %s -> %s | asset_chg=%s",
+                    prev_date, latest_date, comparison['asset_change'])
         return {"success": True, "agent_context": agent_ctx}
 
     # ---- by_category: 按 subCategory 查询 ----

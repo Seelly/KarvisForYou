@@ -4,10 +4,9 @@ KarvisForAll Web 路由 — API 接口 + 页面路由
 所有 /web/* 和 /api/* 路由在此注册。
 """
 import os
-import sys
 import json
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 
@@ -21,16 +20,12 @@ from user_context import (
     create_feedback, get_feedbacks, reply_feedback,
 )
 from config import ADMIN_TOKEN, LOG_FILE_KARVISFORALL
+from log_utils import BEIJING_TZ, get_logger
 
-_BEIJING_TZ = timezone(timedelta(hours=8))
+logger = get_logger(__name__)
 
 web_bp = Blueprint("web", __name__)
 api_bp = Blueprint("api", __name__)
-
-
-def _log(msg):
-    ts = datetime.now(_BEIJING_TZ).strftime("%H:%M:%S")
-    print(f"{ts} {msg}", file=sys.stderr, flush=True)
 
 
 # ============================================================
@@ -54,8 +49,8 @@ def require_auth(f):
         token = _get_token_from_request()
         result = verify_token(token)
         if not result.get("valid"):
-            _log(f"[WebAPI] 鉴权失败: token={token[:8] if token else 'empty'}..., "
-                 f"expired={result.get('expired', False)}")
+            logger.warning("[WebAPI] 鉴权失败: token=%s..., expired=%s",
+                         token[:8] if token else "empty", result.get("expired", False))
             return jsonify({"error": "令牌无效或已过期，请在企微中对 Karvis 说「给我查看链接」重新获取",
                             "expired": result.get("expired", False)}), 401
         kwargs["user_id"] = result["user_id"]
@@ -73,7 +68,7 @@ def require_admin(f):
         if not token:
             token = request.cookies.get("karvis_admin_token", "")
         if not ADMIN_TOKEN or token != ADMIN_TOKEN:
-            _log(f"[WebAPI] 管理员鉴权失败")
+            logger.warning("[WebAPI] 管理员鉴权失败")
             return jsonify({"error": "管理员令牌无效"}), 403
         return f(*args, **kwargs)
     return decorated
@@ -96,14 +91,14 @@ def api_auth_verify():
     result = verify_token(token)
 
     if not result.get("valid"):
-        _log(f"[WebAPI] /api/auth/verify 失败: token={token[:8] if token else 'empty'}...")
+        logger.warning("[WebAPI] /api/auth/verify 失败: token=%s...", token[:8] if token else "empty")
         return jsonify({"valid": False, "expired": result.get("expired", False)})
 
     user_id = result["user_id"]
     ctx = _get_ctx(user_id)
     nickname = ctx.get_nickname() or user_id
 
-    _log(f"[WebAPI] /api/auth/verify 成功: user={user_id}, nickname={nickname}")
+    logger.info("[WebAPI] /api/auth/verify 成功: user=%s, nickname=%s", user_id, nickname)
     return jsonify({"valid": True, "user_id": user_id, "nickname": nickname})
 
 
@@ -112,7 +107,7 @@ def api_auth_verify():
 def api_dashboard(user_id=None):
     """GET /api/dashboard — 仪表盘概览数据（并行 IO）"""
     ctx = _get_ctx(user_id)
-    now = datetime.now(_BEIJING_TZ)
+    now = datetime.now(BEIJING_TZ)
 
     result = {
         "nickname": ctx.get_nickname() or user_id,
@@ -141,7 +136,8 @@ def api_dashboard(user_id=None):
         result["note_count_today"] = len(today_notes)
         recent = qn.split("\n## ")[1:4] if qn else []
         result["recent_notes"] = [s.strip()[:100] for s in recent]
-    except Exception:
+    except Exception as e:
+        logger.warning("解析速记统计失败: %s", e)
         result["note_count_today"] = 0
         result["recent_notes"] = []
 
@@ -153,7 +149,8 @@ def api_dashboard(user_id=None):
         result["todo_pending"] = pending
         result["todo_done"] = done
         result["todo_total"] = pending + done
-    except Exception:
+    except Exception as e:
+        logger.warning("解析待办统计失败: %s", e)
         result["todo_pending"] = 0
         result["todo_done"] = 0
         result["todo_total"] = 0
@@ -178,7 +175,8 @@ def api_dashboard(user_id=None):
             mem_sections = [p for p in re.split(r'\n(?=## )', mem_content) if p.strip().startswith("## ")]
             mem_items = len([l for l in mem_content.split('\n') if l.strip().startswith("- ")])
             result["memory_summary"] = {"sections": len(mem_sections), "items": mem_items}
-        except Exception:
+        except Exception as e:
+            logger.warning("解析 memory 概要失败: %s", e)
             result["memory_summary"] = None
     else:
         result["memory_summary"] = None
@@ -202,7 +200,8 @@ def api_dashboard(user_id=None):
         else:
             result["active_experiment"] = None
         result["role"] = ctx.config.get("role", "")
-    except Exception:
+    except Exception as e:
+        logger.warning("读取 Dashboard 增强字段失败: %s", e)
         result["daily_top3"] = []
         result["active_book"] = None
         result["active_media"] = None
@@ -308,7 +307,7 @@ def api_todo_complete(user_id=None):
         try:
             ctx.IO.write_json(ctx.state_file, state)
         except Exception as e:
-            _log(f"[WebAPI] 写入 state 失败: {e}")
+            logger.error("[WebAPI] 写入 state 失败: %s", e)
 
     return jsonify({
         "ok": result.get("success", False),
@@ -416,7 +415,7 @@ def api_archive_list(user_id=None):
 @require_auth
 def api_archive_detail(filename, user_id=None):
     """GET /api/archive/{filename} — 获取笔记详情"""
-    _log(f"[WebAPI] /api/archive/{filename}: user={user_id}")
+    logger.info("[WebAPI] /api/archive/%s: user=%s", filename, user_id)
     ctx = _get_ctx(user_id)
     category = request.args.get("category", "")
 
@@ -508,8 +507,9 @@ def api_memory(user_id=None):
     try:
         if ctx.storage_mode == "local" and os.path.exists(ctx.memory_file):
             mtime = os.path.getmtime(ctx.memory_file)
-            last_updated = datetime.fromtimestamp(mtime, _BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
-    except Exception:
+            last_updated = datetime.fromtimestamp(mtime, BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
+    except Exception as e:
+        logger.debug("获取 memory 文件修改时间失败: %s", e)
         pass
 
     return jsonify({"sections": sections, "total_items": total_items, "last_updated": last_updated})
@@ -639,9 +639,10 @@ def api_update_settings(user_id=None):
             try:
                 from user_context import update_user_nickname
                 update_user_nickname(user_id, cfg.get("nickname", ""))
-            except Exception:
+            except Exception as e:
+                logger.debug("同步更新昵称失败: %s", e)
                 pass
-        _log(f"[WebAPI] 用户 {user_id} 更新设置: {list(data.keys())}")
+        logger.info("[WebAPI] 用户 %s 更新设置: %s", user_id, list(data.keys()))
 
     return jsonify({"ok": True, "changed": changed})
 
@@ -694,7 +695,8 @@ def api_reflect(user_id=None):
                             entries.append(json.loads(line))
                         except json.JSONDecodeError:
                             continue
-        except Exception:
+        except Exception as e:
+            logger.debug("读取 reflect_log 失败: %s", e)
             pass
 
     entries.sort(key=lambda e: e.get("date", ""), reverse=True)
@@ -759,7 +761,7 @@ def api_habits(user_id=None):
 @require_admin
 def api_admin_users():
     """GET /api/admin/users — 用户列表"""
-    _log(f"[WebAPI] /api/admin/users")
+    logger.info("[WebAPI] /api/admin/users")
     users = get_all_users()
     return jsonify({"users": users})
 
@@ -768,7 +770,7 @@ def api_admin_users():
 @require_admin
 def api_admin_usage():
     """GET /api/admin/usage — LLM 用量统计"""
-    _log(f"[WebAPI] /api/admin/usage")
+    logger.info("[WebAPI] /api/admin/usage")
 
     # 读取 usage_log.jsonl
     entries = []
@@ -783,7 +785,7 @@ def api_admin_usage():
                         except json.JSONDecodeError:
                             continue
     except Exception as e:
-        _log(f"[WebAPI] 读取用量日志失败: {e}")
+        logger.error("[WebAPI] 读取用量日志失败: %s", e)
 
     # 按用户汇总
     user_stats = {}
@@ -825,7 +827,7 @@ def api_admin_usage():
 @require_admin
 def api_admin_suspend(uid):
     """POST /api/admin/users/{id}/suspend — 挂起用户"""
-    _log(f"[WebAPI] /api/admin/suspend: {uid}")
+    logger.info("[WebAPI] /api/admin/suspend: %s", uid)
     update_user_status(uid, "suspended")
     return jsonify({"ok": True, "user_id": uid, "status": "suspended"})
 
@@ -834,7 +836,7 @@ def api_admin_suspend(uid):
 @require_admin
 def api_admin_activate(uid):
     """POST /api/admin/users/{id}/activate — 激活用户"""
-    _log(f"[WebAPI] /api/admin/activate: {uid}")
+    logger.info("[WebAPI] /api/admin/activate: %s", uid)
     update_user_status(uid, "active")
     return jsonify({"ok": True, "user_id": uid, "status": "active"})
 
@@ -847,7 +849,7 @@ def api_admin_stats():
     from collections import defaultdict
 
     days = int(request.args.get("days", "14"))
-    now = datetime.now(_BEIJING_TZ)
+    now = datetime.now(BEIJING_TZ)
     cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d")
 
     # --- 1. 读取 usage_log.jsonl (Token 用量) ---
@@ -865,7 +867,8 @@ def api_admin_stats():
                             usage_entries.append(e)
                     except json.JSONDecodeError:
                         continue
-    except Exception:
+    except Exception as e:
+        logger.debug("读取 usage_log 失败: %s", e)
         pass
 
     # Token 按日汇总
@@ -940,7 +943,8 @@ def api_admin_stats():
                             decisions.append(e)
                     except json.JSONDecodeError:
                         continue
-    except Exception:
+    except Exception as e:
+        logger.debug("读取 decisions.jsonl 失败: %s", e)
         pass
 
     # 按时间倒排，取最近 100 条用于延迟瀑布图
@@ -1087,7 +1091,7 @@ def _aggregate_error_logs():
             key=lambda x: -x["count"]
         )[:20]  # Top 20 错误
     except Exception as e:
-        _log(f"[WebAPI] 错误聚合失败: {e}")
+        logger.error("[WebAPI] 错误聚合失败: %s", e)
     return error_groups
 
 
@@ -1143,7 +1147,7 @@ def api_admin_update_user_skills(uid):
     ctx.save_user_config(config)
     ctx._skills_config = skills_cfg  # 同步内存缓存
 
-    _log(f"[WebAPI] 更新用户 Skill 配置: uid={uid}, mode={mode}, list={skill_list}")
+    logger.info("[WebAPI] 更新用户 Skill 配置: uid=%s, mode=%s, list=%s", uid, mode, skill_list)
     return jsonify({"ok": True, "user_id": uid, "skills": config["skills"]})
 
 
@@ -1197,7 +1201,7 @@ def api_admin_user_detail(uid):
                     except json.JSONDecodeError:
                         continue
     except Exception as e:
-        _log(f"[WebAPI] 读取决策日志失败 {uid}: {e}")
+        logger.error("[WebAPI] 读取决策日志失败 %s: %s", uid, e)
     result["decisions"] = list(reversed(decisions))
 
     # 4. 存储用量
@@ -1214,7 +1218,7 @@ def api_admin_user_detail(uid):
                         pass
             storage["total_size_mb"] = round(storage["total_size_bytes"] / (1024 * 1024), 2)
     except Exception as e:
-        _log(f"[WebAPI] 计算存储用量失败 {uid}: {e}")
+        logger.error("[WebAPI] 计算存储用量失败 %s: %s", uid, e)
     result["storage"] = storage
 
     # 5. State 关键字段（运营诊断用）
@@ -1246,7 +1250,8 @@ def api_admin_user_detail(uid):
                             token_usage["calls"] += 1
                     except json.JSONDecodeError:
                         continue
-    except Exception:
+    except Exception as e:
+        logger.debug("读取用户 token 用量失败: %s", e)
         pass
     result["token_usage"] = token_usage
 
@@ -1268,7 +1273,7 @@ def api_admin_generate_token(uid):
     token = generate_token(uid, expire_hours=expire_hours)
     web_url = f"{request.host_url}web/login?token={token}"
 
-    _log(f"[WebAPI] 管理员为用户 {uid} 生成令牌, expire_hours={expire_hours}")
+    logger.info("[WebAPI] 管理员为用户 %s 生成令牌, expire_hours=%s", uid, expire_hours)
     return jsonify({"ok": True, "user_id": uid, "token": token, "web_url": web_url, "expire_hours": expire_hours})
 
 
@@ -1291,7 +1296,7 @@ def api_admin_update_user_config(uid):
         config["onboarding_step"] = int(data["onboarding_step"])
 
     ctx.save_user_config(config)
-    _log(f"[WebAPI] 管理员更新用户配置: uid={uid}, keys={list(data.keys())}")
+    logger.info("[WebAPI] 管理员更新用户配置: uid=%s, keys=%s", uid, list(data.keys()))
     return jsonify({"ok": True, "user_id": uid, "config": config})
 
 
@@ -1320,10 +1325,10 @@ def api_admin_system_action():
             payload["user_id"] = target_user
         resp = _requests.post("http://127.0.0.1:9000/system", json=payload, timeout=60)
         result = resp.json()
-        _log(f"[WebAPI] 管理员触发系统动作: action={action}, user={target_user or 'all'}, result_ok={result.get('ok')}")
+        logger.info("[WebAPI] 管理员触发系统动作: action=%s, user=%s, result_ok=%s", action, target_user or "all", result.get("ok"))
         return jsonify(result)
     except Exception as e:
-        _log(f"[WebAPI] 系统动作执行失败: {e}")
+        logger.error("[WebAPI] 系统动作执行失败: %s", e)
         return jsonify({"error": str(e)}), 500
 
 
@@ -1386,7 +1391,7 @@ def api_admin_invite_codes_list():
 def api_admin_invite_codes_create():
     """POST /api/admin/invite-codes — 生成邀请码"""
     code = create_invite_code("admin")
-    _log(f"[WebAPI] 生成邀请码: {code}")
+    logger.info("[WebAPI] 生成邀请码: %s", code)
     return jsonify({"ok": True, "code": code})
 
 
@@ -1421,7 +1426,7 @@ def api_admin_announcements_create():
     if not title:
         return jsonify({"error": "标题不能为空"}), 400
     ann = create_announcement(title, content)
-    _log(f"[WebAPI] 发布公告: {title}")
+    logger.info("[WebAPI] 发布公告: %s", title)
     return jsonify({"ok": True, "announcement": ann})
 
 
@@ -1457,7 +1462,7 @@ def api_admin_feedbacks_reply(fb_id):
     ok = reply_feedback(fb_id, reply_text)
     if not ok:
         return jsonify({"error": "反馈不存在"}), 404
-    _log(f"[WebAPI] 回复反馈: {fb_id}")
+    logger.info("[WebAPI] 回复反馈: %s", fb_id)
     return jsonify({"ok": True})
 
 
@@ -1482,7 +1487,7 @@ def api_user_feedback(user_id=None):
     if not content:
         return jsonify({"error": "反馈内容不能为空"}), 400
     fb = create_feedback(user_id, content)
-    _log(f"[WebAPI] 用户 {user_id} 提交反馈: {content[:50]}")
+    logger.info("[WebAPI] 用户 %s 提交反馈: %s", user_id, content[:50])
     return jsonify({"ok": True, "feedback": fb})
 
 
@@ -1599,7 +1604,7 @@ def _read_file_safe(ctx, filepath):
         content = ctx.IO.read_text(filepath)
         return content if content is not None else ""
     except Exception as e:
-        _log(f"[WebAPI] 读取文件失败 {filepath}: {e}")
+        logger.error("[WebAPI] 读取文件失败 %s: %s", filepath, e)
     return ""
 
 
@@ -1609,7 +1614,7 @@ def _read_state_safe(ctx):
         data = ctx.IO.read_json(ctx.state_file)
         return data if data is not None else {}
     except Exception as e:
-        _log(f"[WebAPI] 读取 state 失败: {e}")
+        logger.error("[WebAPI] 读取 state 失败: %s", e)
     return {}
 
 
@@ -1629,7 +1634,7 @@ def _list_files_safe(ctx, dir_path, pattern="*"):
             names = [n for n in names if _fnmatch.fnmatch(n, pattern)]
         return names
     except Exception as e:
-        _log(f"[WebAPI] 列出文件失败 {dir_path}: {e}")
+        logger.error("[WebAPI] 列出文件失败 %s: %s", dir_path, e)
     return []
 
 
@@ -1642,7 +1647,8 @@ def _read_first_line(ctx, filepath):
             if line.startswith("#"):
                 line = line.lstrip("#").strip()
             return line
-    except Exception:
+    except Exception as e:
+        logger.debug("提取文件标题失败: %s", e)
         pass
     return ""
 

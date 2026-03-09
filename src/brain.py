@@ -4,8 +4,10 @@ Karvis 大脑
 核心中枢：Prompt 组装 → 多模型路由 → JSON 解析 → Skill 分发 → 记忆更新
 """
 import json
+import gzip
 import os
-import sys
+import os as _os
+import shutil
 import time as _time
 import threading
 import requests
@@ -18,6 +20,7 @@ try:
 except ImportError:
     _HAS_CNLUNAR = False
 
+import channel_router
 from config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL,
     QWEN_API_KEY, QWEN_BASE_URL, QWEN_MODEL, QWEN_VL_MODEL,
@@ -30,24 +33,16 @@ from memory import (
     format_recent_messages, add_message_to_state, apply_memory_updates,
     read_state_cached, write_state_and_update_cache
 )
+from skill_loader import load_skill_registry, get_skills_for_prompt, get_skill_metadata
+from user_context import USAGE_LOG_FILE, SYSTEM_DIR
 import prompts
 
 # 复用线程池，减少线程创建开销
 _executor = ThreadPoolExecutor(max_workers=6)
 
-_BEIJING_TZ = timezone(timedelta(hours=8))
 
-def _log(msg):
-    ts = datetime.now(_BEIJING_TZ).strftime("%H:%M:%S")
-    try:
-        from app import _get_request_id
-        rid = _get_request_id()
-        if rid:
-            print(f"{ts} [{rid}] {msg}", file=sys.stderr, flush=True)
-            return
-    except ImportError:
-        pass
-    print(f"{ts} {msg}", file=sys.stderr, flush=True)
+from log_utils import BEIJING_TZ, get_logger, get_request_id
+logger = get_logger(__name__)
 
 
 # ============ 管理员告警推送 ============
@@ -64,25 +59,24 @@ def _send_admin_alert(alert_type, message):
     支持冷却机制：同类告警 ALERT_COOLDOWN_SECONDS 内不重复发送。
     """
     if not ADMIN_USER_ID:
-        _log(f"[Alert] 未配置 ADMIN_USER_ID，跳过告警: {alert_type}")
+        logger.warning("[Alert] no ADMIN_USER_ID, skipping alert: %s", alert_type)
         return
 
     now = _time.time()
     last = _alert_state["last_alert_time"].get(alert_type, 0)
     if now - last < ALERT_COOLDOWN_SECONDS:
-        _log(f"[Alert] 冷却中，跳过: {alert_type} (距上次{now - last:.0f}s)")
+        logger.info("[Alert] cooling down, skip: %s (%.0fs since last)", alert_type, now - last)
         return
 
     try:
-        from channel_router import send_alert
-        results = send_alert(f"🚨 Karvis 告警\n\n{message}")
+        results = channel_router.send_alert(f"🚨 Karvis 告警\n\n{message}")
         if any(ok for _, ok in results):
             _alert_state["last_alert_time"][alert_type] = now
-            _log(f"[Alert] 已推送: {alert_type}")
+            logger.info("[Alert] sent: %s", alert_type)
         else:
-            _log(f"[Alert] 推送失败: {alert_type}")
+            logger.warning("[Alert] send failed: %s", alert_type)
     except Exception as e:
-        _log(f"[Alert] 推送异常: {e}")
+        logger.error("[Alert] send exception: %s", e)
 
 
 def _check_and_alert(elapsed, user_id, skill, user_text, error=None):
@@ -124,9 +118,6 @@ _MONTHLY_BUDGET = float(os.environ.get("MONTHLY_BUDGET", "50"))
 def _check_monthly_budget():
     """检查当月 API 成本是否超过预算的 80%，超过则推企微告警"""
     try:
-        from user_context import USAGE_LOG_FILE
-        import os as _os
-
         if not _os.path.exists(USAGE_LOG_FILE):
             return
 
@@ -161,7 +152,7 @@ def _check_monthly_budget():
                 f"使用率: {pct:.0f}%\n"
                 f"月份: {month_str}")
     except Exception as e:
-        _log(f"[Alert] 预算检查异常: {e}")
+        logger.error("[Alert] budget check exception: %s", e)
 
 
 # ============ LLM 用量日志 ============
@@ -178,8 +169,6 @@ def _set_current_user(user_id):
 def _log_llm_usage(model_tier, model_name, usage_dict, latency_s):
     """记录一次 LLM 调用的用量到 usage_log.jsonl，支持自动轮转"""
     try:
-        from user_context import USAGE_LOG_FILE, SYSTEM_DIR
-
         user_id = getattr(_thread_local, "user_id", "unknown")
         now = datetime.now(timezone(timedelta(hours=8)))
 
@@ -202,7 +191,7 @@ def _log_llm_usage(model_tier, model_name, usage_dict, latency_s):
         with open(USAGE_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception as e:
-        _log(f"[UsageLog] 记录失败: {e}")
+        logger.error("[UsageLog] record failed: %s", e)
 
 
 _JSONL_ROTATE_MAX_MB = 10  # JSONL 文件轮转阈值
@@ -222,31 +211,28 @@ def _rotate_jsonl(filepath, max_size_mb=None):
         now_str = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
         bak_path = f"{filepath}.{now_str}.bak"
         os.rename(filepath, bak_path)
-        _log(f"[Rotate] {filepath} ({size_mb:.1f}MB) → {bak_path}")
+        logger.info("[Rotate] %s (%.1fMB) -> %s", filepath, size_mb, bak_path)
 
         # 异步压缩 bak 文件（不阻塞主线程）
         def _compress():
-            import gzip
-            import shutil
             try:
                 with open(bak_path, 'rb') as f_in:
                     with gzip.open(f"{bak_path}.gz", 'wb') as f_out:
                         shutil.copyfileobj(f_in, f_out)
                 os.remove(bak_path)
-                _log(f"[Rotate] 压缩完成: {bak_path}.gz")
+                logger.info("[Rotate] compressed: %s.gz", bak_path)
             except Exception as e:
-                _log(f"[Rotate] 压缩失败: {e}")
+                logger.error("[Rotate] compress failed: %s", e)
 
         _executor.submit(_compress)
     except Exception as e:
-        _log(f"[Rotate] 轮转失败: {e}")
+        logger.error("[Rotate] rotation failed: %s", e)
 
 
 # ============ Skill 注册表 ============
 
 def _get_skill_registry():
     """通过 skill_loader 自动发现并加载所有 skill（O-010）"""
-    from skill_loader import load_skill_registry
     return load_skill_registry()
 
 
@@ -299,14 +285,14 @@ def call_llm(messages, model_tier="main", max_tokens=500,
                               enable_thinking=thinking)
     except Exception as e:
         if model_tier == "flash":
-            _log(f"[Brain] Qwen Flash 失败: {e}, 降级到 DeepSeek")
+            logger.warning("[Brain] Qwen Flash failed: %s, fallback to DeepSeek", e)
             try:
                 return _call_deepseek(messages, max_tokens, temperature,
                                       enable_thinking=False)
             except Exception as e2:
-                _log(f"[Brain] DeepSeek 降级也失败: {e2}")
+                logger.error("[Brain] DeepSeek fallback also failed: %s", e2)
                 return None
-        _log(f"[Brain] LLM 调用失败 (tier={model_tier}): {e}")
+        logger.error("[Brain] LLM call failed (tier=%s): %s", model_tier, e)
         return None
 
 
@@ -330,8 +316,8 @@ def _call_deepseek(messages, max_tokens=500, temperature=0.3,
 
     total_chars = sum(len(m.get("content", "")) for m in messages)
     tier_label = "Think" if enable_thinking else "Main"
-    _log(f"[Brain][{tier_label}] DeepSeek请求: model={DEEPSEEK_MODEL}, "
-         f"thinking={enable_thinking}, prompt_chars={total_chars}, max_tokens={max_tokens}")
+    logger.info("[Brain][%s] DeepSeek request: model=%s, thinking=%s, prompt_chars=%s, max_tokens=%s",
+                tier_label, DEEPSEEK_MODEL, enable_thinking, total_chars, max_tokens)
 
     t0 = _time.time()
     resp = requests.post(url, headers=headers, json=data, timeout=60)
@@ -340,14 +326,13 @@ def _call_deepseek(messages, max_tokens=500, temperature=0.3,
     if resp.status_code == 200:
         result = resp.json()
         usage = result.get("usage", {})
-        _log(f"[Brain][{tier_label}] DeepSeek响应: {t1-t0:.1f}s, "
-             f"prompt_tokens={usage.get('prompt_tokens')}, "
-             f"completion_tokens={usage.get('completion_tokens')}")
+        logger.info("[Brain][%s] DeepSeek response: %.1fs, prompt_tokens=%s, completion_tokens=%s",
+                    tier_label, t1-t0, usage.get("prompt_tokens"), usage.get("completion_tokens"))
         _log_llm_usage("think" if enable_thinking else "main",
                        DEEPSEEK_MODEL, usage, t1 - t0)
         return result["choices"][0]["message"]["content"]
 
-    _log(f"[Brain][{tier_label}] DeepSeek API 错误: {resp.status_code} - {resp.text[:200]}")
+    logger.error("[Brain][%s] DeepSeek API error: %s - %s", tier_label, resp.status_code, resp.text[:200])
     raise RuntimeError(f"DeepSeek API {resp.status_code}")
 
 
@@ -366,8 +351,8 @@ def _call_qwen_flash(messages, max_tokens=500, temperature=0.3):
     }
 
     total_chars = sum(len(m.get("content", "")) for m in messages)
-    _log(f"[Brain][Flash] Qwen请求: model={QWEN_MODEL}, "
-         f"prompt_chars={total_chars}, max_tokens={max_tokens}")
+    logger.info("[Brain][Flash] Qwen request: model=%s, prompt_chars=%s, max_tokens=%s",
+                QWEN_MODEL, total_chars, max_tokens)
 
     t0 = _time.time()
     resp = requests.post(url, headers=headers, json=data, timeout=30)
@@ -376,13 +361,12 @@ def _call_qwen_flash(messages, max_tokens=500, temperature=0.3):
     if resp.status_code == 200:
         result = resp.json()
         usage = result.get("usage", {})
-        _log(f"[Brain][Flash] Qwen响应: {t1-t0:.1f}s, "
-             f"prompt_tokens={usage.get('prompt_tokens')}, "
-             f"completion_tokens={usage.get('completion_tokens')}")
+        logger.info("[Brain][Flash] Qwen response: %.1fs, prompt_tokens=%s, completion_tokens=%s",
+                    t1-t0, usage.get("prompt_tokens"), usage.get("completion_tokens"))
         _log_llm_usage("flash", QWEN_MODEL, usage, t1 - t0)
         return result["choices"][0]["message"]["content"]
 
-    _log(f"[Brain][Flash] Qwen API 错误: {resp.status_code} - {resp.text[:200]}")
+    logger.error("[Brain][Flash] Qwen API error: %s - %s", resp.status_code, resp.text[:200])
     raise RuntimeError(f"Qwen API {resp.status_code}")
 
 
@@ -425,8 +409,8 @@ def _call_qwen_vl(image_base64, prompt=None):
         "max_tokens": 500
     }
 
-    _log(f"[Brain][VL] Qwen VL请求: model={QWEN_VL_MODEL}, "
-         f"image_size={len(image_base64)//1024}KB, prompt={prompt[:50]}")
+    logger.info("[Brain][VL] Qwen VL request: model=%s, image_size=%sKB, prompt=%s",
+                QWEN_VL_MODEL, len(image_base64)//1024, prompt[:50])
 
     t0 = _time.time()
     try:
@@ -437,17 +421,15 @@ def _call_qwen_vl(image_base64, prompt=None):
             result = resp.json()
             usage = result.get("usage", {})
             description = result["choices"][0]["message"]["content"]
-            _log(f"[Brain][VL] Qwen VL响应: {t1-t0:.1f}s, "
-                 f"prompt_tokens={usage.get('prompt_tokens')}, "
-                 f"completion_tokens={usage.get('completion_tokens')}, "
-                 f"desc={description[:80]}")
+            logger.info("[Brain][VL] Qwen VL response: %.1fs, prompt_tokens=%s, completion_tokens=%s, desc=%s",
+                    t1-t0, usage.get("prompt_tokens"), usage.get("completion_tokens"), description[:80])
             _log_llm_usage("vl", QWEN_VL_MODEL, usage, t1 - t0)
             return description
 
-        _log(f"[Brain][VL] Qwen VL API 错误: {resp.status_code} - {resp.text[:200]}")
+        logger.error("[Brain][VL] Qwen VL API error: %s - %s", resp.status_code, resp.text[:200])
         return None
     except Exception as e:
-        _log(f"[Brain][VL] Qwen VL 调用异常: {e}")
+        logger.error("[Brain][VL] Qwen VL call exception: %s", e)
         return None
 
 
@@ -489,7 +471,8 @@ def _build_time_string(now_bj):
             st = lunar.todaySolarTerms
             if st and st != "无":
                 parts.append(f"节气：{st}")
-        except Exception:
+        except Exception as e:
+            logger.debug("cnlunar 解析异常: %s", e)
             pass  # cnlunar 异常不影响主流程
 
     return " | ".join(parts)
@@ -586,7 +569,6 @@ def build_system_prompt(state, ctx, prompt_futs=None, payload=None):
     if is_system:
         skills_block = ""
     else:
-        from skill_loader import get_skills_for_prompt
         allowed_names = get_skills_for_prompt(ctx)
         skills_block = prompts.build_skills_prompt(allowed_names)
 
@@ -698,7 +680,7 @@ def process(payload, send_fn=None, ctx=None):
         ctx: UserContext, 当前用户上下文
     """
     t_start = _time.time()
-    _log(f"[Brain] 收到: {json.dumps(payload, ensure_ascii=False)[:200]}")
+    logger.info("[Brain] received: %s", json.dumps(payload, ensure_ascii=False)[:200])
 
     # 设置当前线程的 user_id，供 LLM 用量日志使用
     user_id = payload.get("user_id", "unknown")
@@ -708,7 +690,7 @@ def process(payload, send_fn=None, ctx=None):
     if ctx and hasattr(ctx.IO, 'get_token'):
         ctx.IO.get_token()
     t_token = _time.time()
-    _log(f"[Brain][耗时] 存储预热: {t_token - t_start:.1f}s")
+    logger.debug("[Brain][timing] storage warmup: %.1fs", t_token - t_start)
 
     # 1. 读取 state 和 memory（并发，按用户隔离）
     state_future = _executor.submit(read_state_cached, ctx)
@@ -720,15 +702,15 @@ def process(payload, send_fn=None, ctx=None):
     #    图片消息：管理员调 VL 模型获取描述；非管理员返回"敬请期待"
     if payload.get("type") == "image" and payload.get("image_base64"):
         if ctx and ctx.is_admin:
-            _log("[Brain] 检测到图片（管理员），调用千问 VL 进行图像理解...")
+            logger.info("[Brain] image detected (admin), calling Qwen VL...")
             vl_desc = _call_qwen_vl(payload["image_base64"])
             if vl_desc:
                 payload["image_description"] = vl_desc
-                _log(f"[Brain] 图像理解完成: {vl_desc[:100]}")
+                logger.info("[Brain] image understanding done: %s", vl_desc[:100])
             else:
-                _log("[Brain] 图像理解失败，降级为普通图片处理")
+                logger.warning("[Brain] image understanding failed, fallback to plain image")
         else:
-            _log(f"[Brain] 非管理员图片消息，跳过 VL 调用, user={user_id}")
+            logger.info("[Brain] non-admin image, skip VL call, user=%s", user_id)
         # 释放 base64 数据，节省内存
         del payload["image_base64"]
         # V12: 非管理员图片 — 记录附件到 Quick-Notes，回复"敬请期待"，跳过 LLM 调用
@@ -742,7 +724,7 @@ def process(payload, send_fn=None, ctx=None):
     # 等 state 结果（可能命中 /tmp 缓存，<1ms）
     state = state_future.result() or {}
     t_state = _time.time()
-    _log(f"[Brain][耗时] state读取: {t_state - t_token:.1f}s")
+    logger.debug("[Brain][timing] state read: %.1fs", t_state - t_token)
 
     # 3. 检查打卡超时
     _check_checkin_timeout(state)
@@ -755,7 +737,7 @@ def process(payload, send_fn=None, ctx=None):
     # 5. 构建 prompt 并调用 LLM（prompt_futs 在步骤 1 已提交，此处直接取结果）
     system_prompt = build_system_prompt(state, ctx, prompt_futs=prompt_futs, payload=payload)
     t_prompt = _time.time()
-    _log(f"[Brain][耗时] prompt组装: {t_prompt - t_state:.1f}s (prompt长度={len(system_prompt)})")
+    logger.debug("[Brain][timing] prompt build: %.1fs (prompt_len=%s)", t_prompt - t_state, len(system_prompt))
 
     user_message = _build_user_message(payload)
 
@@ -763,17 +745,17 @@ def process(payload, send_fn=None, ctx=None):
     is_system = payload.get("type") == "system"
     action = payload.get("action", "") if is_system else None
     model_tier = _select_model_tier(payload, is_system_action=is_system, action=action)
-    _log(f"[Brain] 模型路由: tier={model_tier}, is_system={is_system}, action={action}")
+    logger.info("[Brain] model routing: tier=%s, is_system=%s, action=%s", model_tier, is_system, action)
 
     llm_response = call_llm([
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message}
     ], model_tier=model_tier)
     t_llm = _time.time()
-    _log(f"[Brain][耗时] LLM调用({model_tier}): {t_llm - t_prompt:.1f}s")
+    logger.debug("[Brain][timing] LLM call (%s): %.1fs", model_tier, t_llm - t_prompt)
 
     if not llm_response:
-        _log("[Brain] LLM 返回空，降级处理")
+        logger.warning("[Brain] LLM returned empty, fallback")
         # Quick-Notes 统一写入
         if payload.get("type") != "system":
             _save_to_quick_notes(payload, state, ctx)
@@ -782,14 +764,14 @@ def process(payload, send_fn=None, ctx=None):
     # 6. 解析 LLM 输出
     decision = _parse_llm_output(llm_response)
     if not decision:
-        _log(f"[Brain] JSON 解析失败，原始: {llm_response[:300]}")
+        logger.warning("[Brain] JSON parse failed, raw: %s", llm_response[:300])
         if payload.get("type") != "system":
             _save_to_quick_notes(payload, state, ctx)
         return {"reply": "已记录到 Obsidian"}
 
-    _log(f"[Brain] 决策: skill={decision.get('skill')}, thinking={decision.get('thinking', '')[:80]}")
+    logger.info("[Brain] decision: skill=%s, thinking=%s", decision.get("skill"), decision.get("thinking", "")[:80])
     if decision.get("memory_updates"):
-        _log(f"[Brain] 记忆更新: {json.dumps(decision['memory_updates'], ensure_ascii=False)[:200]}")
+        logger.info("[Brain] memory updates: %s", json.dumps(decision["memory_updates"], ensure_ascii=False)[:200])
 
     registry = _get_skill_registry()
 
@@ -806,7 +788,7 @@ def process(payload, send_fn=None, ctx=None):
             and payload.get("type") != "system"
             and primary_skill not in _REFLECT_SKILLS
             and primary_skill not in _CHECKIN_SKILLS):
-        _log(f"[Brain] 深度自问防护: {primary_skill} → reflect.answer")
+        logger.info("[Brain] reflect guard: %s -> reflect.answer", primary_skill)
         decision["skill"] = "reflect.answer"
         decision["params"] = {"answer": user_text}
         decision.pop("steps", None)
@@ -815,7 +797,7 @@ def process(payload, send_fn=None, ctx=None):
     _pending_note_filter = False  # 是否需要 Flash 后判
     if payload.get("type") != "system" and primary_skill not in ("checkin.answer", "checkin.skip", "checkin.cancel", "checkin.start", "reflect.answer", "reflect.skip"):
         if primary_skill in _SKIP_NOTE_SKILLS:
-            _log(f"[Brain][NoteFilter] 规则跳过: skill={primary_skill}")
+            logger.debug("[Brain][NoteFilter] rule skip: skill=%s", primary_skill)
         elif primary_skill == "note.save":
             # 用户明确要求记录，直接写入
             _save_to_quick_notes(payload, state, ctx)
@@ -826,7 +808,7 @@ def process(payload, send_fn=None, ctx=None):
     # 8. 执行 Steps（支持单步旧格式 + 多步 steps 格式）
     steps, step_results = _execute_steps(decision, state, registry, ctx)
     t_skill = _time.time()
-    _log(f"[Brain][耗时] Skill执行: {t_skill - t_llm:.1f}s")
+    logger.debug("[Brain][timing] skill exec: %.1fs", t_skill - t_llm)
 
     # V3-F10: Agent Loop — 如果 LLM 返回 continue=true 且 skill 返回 agent_context，进入多轮循环
     if len(steps) == 1 and decision.get("continue"):
@@ -840,7 +822,7 @@ def process(payload, send_fn=None, ctx=None):
             steps = [{"skill": decision.get("skill", "ignore"), "params": decision.get("params", {})}]
             step_results = [{"skill": decision.get("skill", "ignore"), "result": last_skill_result or {"success": True}}]
             t_agent = _time.time()
-            _log(f"[Brain][耗时] Agent Loop: {t_agent - t_skill:.1f}s")
+            logger.debug("[Brain][timing] agent loop: %.1fs", t_agent - t_skill)
             t_skill = t_agent
 
     # 9. 合并状态更新（从所有 step 结果中收集）
@@ -848,34 +830,34 @@ def process(payload, send_fn=None, ctx=None):
         r = sr.get("result", {})
         if isinstance(r, dict):
             if r.get("state_updates"):
-                _log(f"[Brain] 合并 state_updates from {sr.get('skill')}: {list(r['state_updates'].keys())}")
+                logger.debug("[Brain] merging state_updates from %s: %s", sr.get("skill"), list(r["state_updates"].keys()))
                 state.update(r["state_updates"])
             # 合并 skill handler 返回的 memory_updates（如 settings 设置）
             if r.get("memory_updates"):
                 existing = decision.get("memory_updates", [])
                 decision["memory_updates"] = existing + r["memory_updates"]
-                _log(f"[Brain] 合并 memory_updates from {sr.get('skill')}: "
-                     f"新增{len(r['memory_updates'])}条, 总计{len(decision['memory_updates'])}条")
+                logger.debug("[Brain] merging memory_updates from %s: +%s, total=%s",
+                         sr.get("skill"), len(r["memory_updates"]), len(decision["memory_updates"]))
     llm_state_updates = decision.get("state_updates", {})
     if llm_state_updates:
         state.update(llm_state_updates)
 
     # 10. 智能回复路由：简单 skill 直接用 decision.reply，复杂场景走 Flash 二次加工
     reply = _resolve_reply(user_text, decision, steps, step_results)
-    _log(f"[Brain] 回复路由: reply={'有' if reply else '无'}({len(reply) if reply else 0}字)")
+    logger.info("[Brain] reply routing: reply=%s(%s chars)", "yes" if reply else "no", len(reply) if reply else 0)
 
     # 兜底：用户消息必须有回复（system 类型除外）
     if not reply and payload.get("type") != "system":
         if decision.get("memory_updates"):
             reply = "记住啦~"
-            _log(f"[Brain] 兜底回复: 有memory_updates → '记住啦~'")
+            logger.debug("[Brain] fallback reply: has memory_updates -> remembered")
         elif primary_skill == "note.save":
             reply = "已记录 ✅"
         elif primary_skill == "ignore":
             reply = "收到~"
         else:
             reply = "好的~"
-            _log(f"[Brain] 兜底回复: skill={primary_skill} → '{reply}'")
+            logger.debug("[Brain] fallback reply: skill=%s -> %s", primary_skill, reply)
 
     if reply:
         add_message_to_state(state, "karvis", reply)
@@ -884,9 +866,9 @@ def process(payload, send_fn=None, ctx=None):
     if send_fn and reply:
         try:
             send_fn(reply)
-            _log(f"[Brain] 回复已先行发送，开始后台保存")
+            logger.info("[Brain] reply sent first, starting background save")
         except Exception as e:
-            _log(f"[Brain] 先行发送失败: {e}")
+            logger.error("[Brain] early send failed: %s", e)
 
     # V-Web-01: 回复发出后异步 Flash 过滤 Quick-Notes
     if _pending_note_filter:
@@ -896,12 +878,12 @@ def process(payload, send_fn=None, ctx=None):
     try:
         _update_user_rhythm(state)
     except Exception as e:
-        _log(f"[Brain][V8] 节奏更新失败（不影响主流程）: {e}")
+        logger.error("[Brain][V8] rhythm update failed (non-blocking): %s", e)
 
     t_save_start = _time.time()
     _save_state_and_memory(state, decision, payload=payload, reply=reply, elapsed=t_save_start - t_start, ctx=ctx)
     t_end = _time.time()
-    _log(f"[Brain][耗时] 保存state: {t_end - t_save_start:.1f}s | 总计: {t_end - t_start:.1f}s")
+    logger.info("[Brain][timing] save state: %.1fs | total: %.1fs", t_end - t_save_start, t_end - t_start)
 
     # 11. 异步告警检测（不阻塞返回）
     total_elapsed = t_end - t_start
@@ -919,7 +901,7 @@ def _save_state_and_memory(state, decision, payload=None, reply=None, elapsed=No
 
     memory_updates = decision.get("memory_updates", [])
     if memory_updates:
-        _log(f"[Brain] 异步保存 memory_updates: {len(memory_updates)} 条")
+        logger.info("[Brain] async saving memory_updates: %s items", len(memory_updates))
         futs.append(_executor.submit(_write_memory, memory_updates, ctx))
 
     # 决策日志
@@ -930,21 +912,21 @@ def _save_state_and_memory(state, decision, payload=None, reply=None, elapsed=No
         try:
             f.result(timeout=30)
         except Exception as e:
-            _log(f"[Brain] 写入异常: {e}")
+            logger.error("[Brain] write exception: %s", e)
 
 
 def _write_state(state, ctx):
     try:
         write_state_and_update_cache(state, ctx)
     except Exception as e:
-        _log(f"[Brain] state 保存失败: {e}")
+        logger.error("[Brain] state save failed: %s", e)
 
 
 def _write_memory(memory_updates, ctx):
     try:
         apply_memory_updates(memory_updates, ctx)
     except Exception as e:
-        _log(f"[Brain] 记忆更新失败: {e}")
+        logger.error("[Brain] memory update failed: %s", e)
 
 
 def _write_decision_log(payload, decision, reply, elapsed, ctx):
@@ -971,13 +953,9 @@ def _write_decision_log(payload, decision, reply, elapsed, ctx):
             "elapsed_s": round(elapsed, 1) if elapsed else None,
         }
         # 注入 Request ID（如果有）
-        try:
-            from app import _get_request_id
-            rid = _get_request_id()
-            if rid:
-                entry["request_id"] = rid
-        except ImportError:
-            pass
+        rid = get_request_id()
+        if rid:
+            entry["request_id"] = rid
         line = json.dumps(entry, ensure_ascii=False)
 
         log_file = ctx.decision_log_file if ctx else ""
@@ -988,9 +966,9 @@ def _write_decision_log(payload, decision, reply, elapsed, ctx):
             existing = ctx.IO.read_text(log_file) or ""
             new_content = existing + line + "\n"
             ctx.IO.write_text(log_file, new_content)
-        _log(f"[Brain] 决策日志已写入: skill={entry['skill']}")
+        logger.debug("[Brain] decision log written: skill=%s", entry["skill"])
     except Exception as e:
-        _log(f"[Brain] 决策日志写入失败（不影响主流程）: {e}")
+        logger.error("[Brain] decision log write failed (non-blocking): %s", e)
 
 
 # ============ V3-F10: Agent Loop ============
@@ -1023,24 +1001,24 @@ def _run_agent_loop(system_prompt, user_message, first_decision, first_context, 
     last_skill_result = {"success": True, "agent_context": first_context}
 
     for step in range(2, MAX_ROUNDS + 1):
-        _log(f"[Brain][AgentLoop] 第 {step} 轮")
+        logger.info("[Brain][AgentLoop] round %s", step)
 
         # Agent Loop 中走 Main（后续可按 skill 动态选择 tier）
         llm_response = call_llm(messages, model_tier="main", max_tokens=500, temperature=0.3)
         if not llm_response:
-            _log(f"[Brain][AgentLoop] LLM 返回空，终止循环")
+            logger.warning("[Brain][AgentLoop] LLM returned empty, breaking")
             break
 
         decision = _parse_llm_output(llm_response)
         if not decision:
-            _log(f"[Brain][AgentLoop] JSON 解析失败，终止循环")
+            logger.warning("[Brain][AgentLoop] JSON parse failed, breaking")
             break
 
         last_decision = decision
         skill_name = decision.get("skill", "ignore")
         params = decision.get("params", {})
 
-        _log(f"[Brain][AgentLoop] step={step}, skill={skill_name}, continue={decision.get('continue')}")
+        logger.info("[Brain][AgentLoop] step=%s, skill=%s, continue=%s", step, skill_name, decision.get("continue"))
 
         # 如果不再继续，退出循环
         if not decision.get("continue"):
@@ -1051,21 +1029,21 @@ def _run_agent_loop(system_prompt, user_message, first_decision, first_context, 
                     try:
                         last_skill_result = handler(params, state, ctx)
                     except Exception as e:
-                        _log(f"[Brain][AgentLoop] 最终 Skill {skill_name} 执行失败: {e}")
+                        logger.error("[Brain][AgentLoop] final skill %s exec failed: %s", skill_name, e)
                         last_skill_result = {"success": False}
             break
 
         # 继续循环：执行 internal.* skill
         handler = registry.get(skill_name)
         if not handler:
-            _log(f"[Brain][AgentLoop] 未知 skill: {skill_name}，终止")
+            logger.warning("[Brain][AgentLoop] unknown skill: %s, breaking", skill_name)
             break
 
         try:
             skill_result = handler(params, state, ctx)
             agent_context = skill_result.get("agent_context") if isinstance(skill_result, dict) else None
         except Exception as e:
-            _log(f"[Brain][AgentLoop] Skill {skill_name} 异常: {e}")
+            logger.error("[Brain][AgentLoop] skill %s exception: %s", skill_name, e)
             agent_context = {"error": str(e)}
 
         last_skill_result = skill_result or {"success": True}
@@ -1078,7 +1056,7 @@ def _run_agent_loop(system_prompt, user_message, first_decision, first_context, 
             "skill_result": agent_context or {}
         }, ensure_ascii=False)})
 
-    _log(f"[Brain][AgentLoop] 循环结束，最终 skill={last_decision.get('skill')}")
+    logger.info("[Brain][AgentLoop] loop done, final skill=%s", last_decision.get("skill"))
     return last_decision, last_skill_result
 
 
@@ -1135,7 +1113,6 @@ def _execute_steps(decision, state, registry, ctx):
         steps = [{"skill": skill, "params": params}]
 
     # V12: 加载 Skill 元数据用于 visibility 检查
-    from skill_loader import get_skill_metadata
     all_metadata = get_skill_metadata()
 
     results = []
@@ -1144,7 +1121,7 @@ def _execute_steps(decision, state, registry, ctx):
         params = step.get("params", {})
 
         if skill_name == "note.save":
-            _log(f"[Brain] Step {i}: note.save 已由统一写入处理，跳过")
+            logger.debug("[Brain] Step %s: note.save handled by unified write, skip", i)
             results.append({"skill": skill_name, "result": {"success": True}})
             continue
         if skill_name == "ignore":
@@ -1157,7 +1134,7 @@ def _execute_steps(decision, state, registry, ctx):
 
         # 1) private Skill → 非管理员完全不透露存在
         if vis == "private" and not ctx.is_admin:
-            _log(f"[Brain] Step {i}: {skill_name} 是 private，用户 {ctx.user_id} 无权限")
+            logger.warning("[Brain] Step %s: %s is private, user %s denied", i, skill_name, ctx.user_id)
             results.append({"skill": skill_name, "result": {
                 "success": False,
                 "reply_override": "我目前没有这个功能哦~ 如果你想管理待办或记笔记，随时告诉我~"
@@ -1168,7 +1145,7 @@ def _execute_steps(decision, state, registry, ctx):
         if vis == "preview" and not ctx.is_admin:
             preview_msg = meta.get("preview_message",
                                    "该功能即将在订阅版上线，敬请期待~ 目前你可以用文字描述给我，我一样能帮到你~")
-            _log(f"[Brain] Step {i}: {skill_name} 是 preview，返回预告")
+            logger.info("[Brain] Step %s: %s is preview, returning teaser", i, skill_name)
             results.append({"skill": skill_name, "result": {
                 "success": False,
                 "reply_override": preview_msg
@@ -1177,7 +1154,7 @@ def _execute_steps(decision, state, registry, ctx):
 
         # 3) 用户级黑白名单
         if not ctx.is_skill_allowed(skill_name):
-            _log(f"[Brain] Step {i}: {skill_name} 被用户 {ctx.user_id} 禁用")
+            logger.info("[Brain] Step %s: %s disabled by user %s", i, skill_name, ctx.user_id)
             results.append({"skill": skill_name, "result": {
                 "success": False,
                 "reply_override": f"「{skill_name.split('.')[0]}」功能未开启，你可以说「开启{skill_name.split('.')[0]}」来启用~"
@@ -1186,18 +1163,16 @@ def _execute_steps(decision, state, registry, ctx):
 
         handler = registry.get(skill_name)
         if not handler:
-            _log(f"[Brain] Step {i}: 未知 skill {skill_name}")
+            logger.warning("[Brain] Step %s: unknown skill %s", i, skill_name)
             results.append({"skill": skill_name, "result": {"success": False, "error": f"未知 skill: {skill_name}"}})
             continue
 
         try:
             result = handler(params, state, ctx)
             results.append({"skill": skill_name, "result": result or {"success": True}})
-            _log(f"[Brain] Step {i}: {skill_name} → success={result.get('success') if isinstance(result, dict) else True}")
+            logger.info("[Brain] Step %s: %s -> success=%s", i, skill_name, result.get("success") if isinstance(result, dict) else True)
         except Exception as e:
-            _log(f"[Brain] Step {i}: {skill_name} 异常: {e}")
-            import traceback
-            traceback.print_exc(file=sys.stderr)
+            logger.exception("[Brain] Step %s: %s exception", i, skill_name)
             results.append({"skill": skill_name, "result": {"success": False, "error": str(e)}})
 
     return steps, results
@@ -1238,11 +1213,11 @@ def _resolve_reply(user_text, decision, steps, step_results):
         return r.get("reply") if isinstance(r, dict) else llm_reply
 
     # 复杂路径：需要 Flash 二次加工
-    _log(f"[Brain][V4] 触发 Flash 回复层: skills={all_skills}")
+    logger.info("[Brain][V4] triggering Flash reply layer: skills=%s", all_skills)
     t0 = _time.time()
     flash_reply = _call_flash_for_reply(user_text, decision, steps, step_results)
     t1 = _time.time()
-    _log(f"[Brain][V4][耗时] Flash回复生成: {t1-t0:.1f}s")
+    logger.debug("[Brain][V4][timing] Flash reply generation: %.1fs", t1-t0)
     return flash_reply or llm_reply
 
 
@@ -1281,7 +1256,7 @@ def _call_flash_for_reply(user_text, decision, steps, step_results):
         ], model_tier="flash", max_tokens=300, temperature=0.5)
         return reply
     except Exception as e:
-        _log(f"[Brain][V4] Flash 回复生成失败: {e}")
+        logger.error("[Brain][V4] Flash reply generation failed: %s", e)
         return None
 
 def _save_to_quick_notes(payload, state, ctx):
@@ -1312,7 +1287,7 @@ def _save_to_quick_notes(payload, state, ctx):
         if content or attachment:
             note_save.execute({"content": content, "attachment": attachment}, state, ctx)
     except Exception as e:
-        _log(f"[Brain] Quick-Notes 统一写入失败（不影响主流程）: {e}")
+        logger.error("[Brain] Quick-Notes write failed (non-blocking): %s", e)
 
 def _flash_filter_and_save(payload, state, ctx, primary_skill):
     """回复后异步执行：用 Flash 判断消息是否值得写入 Quick-Notes（V-Web-01）"""
@@ -1327,11 +1302,11 @@ def _flash_filter_and_save(payload, state, ctx, primary_skill):
         should_save = result and result.strip().upper().startswith("YES")
         if should_save:
             _save_to_quick_notes(payload, state, ctx)
-            _log(f"[Brain][NoteFilter] Flash判断写入: skill={primary_skill}, text={text[:40]}...")
+            logger.info("[Brain][NoteFilter] Flash decided save: skill=%s, text=%s...", primary_skill, text[:40])
         else:
-            _log(f"[Brain][NoteFilter] Flash判断跳过: skill={primary_skill}, text={text[:40]}...")
+            logger.info("[Brain][NoteFilter] Flash decided skip: skill=%s, text=%s...", primary_skill, text[:40])
     except Exception as e:
-        _log(f"[Brain][NoteFilter] Flash判断失败，兜底写入: {e}")
+        logger.warning("[Brain][NoteFilter] Flash filter failed, fallback save: %s", e)
         _save_to_quick_notes(payload, state, ctx)
 
 
@@ -1458,7 +1433,7 @@ def _parse_llm_output(text):
         except json.JSONDecodeError:
             pass
 
-    _log(f"[Brain] 无法解析 JSON: {text[:200]}")
+    logger.warning("[Brain] cannot parse JSON: %s", text[:200])
     return None
 
 
@@ -1495,7 +1470,8 @@ def _update_nudge_state(state):
                     nudge["streak"] = nudge.get("streak", 0) + 1
                 elif (today_dt - last_dt).days > 1:
                     nudge["streak"] = 1
-            except Exception:
+            except Exception as e:
+                logger.warning("解析 nudge streak 日期失败: %s", e)
                 nudge["streak"] = 1
         else:
             nudge["streak"] = 1
@@ -1518,11 +1494,11 @@ def _check_checkin_timeout(state):
         sent_time = sent_time.replace(tzinfo=beijing_tz)
         diff = (now - sent_time).total_seconds()
         if diff > CHECKIN_TIMEOUT_SECONDS:
-            _log(f"[Brain] 打卡超时 ({diff:.0f}s)")
+            logger.info("[Brain] checkin timeout (%.0fs)", diff)
             from skills import checkin_flow
             checkin_flow.finish(state, timeout=True)
     except Exception as e:
-        _log(f"[Brain] 打卡超时检查异常: {e}")
+        logger.error("[Brain] checkin timeout check exception: %s", e)
 
 
 # ============ V8: 用户节奏学习 ============
@@ -1573,7 +1549,7 @@ def _update_user_rhythm(state):
             _update_avg_time(rhythm, "avg_wake_time", now.strftime("%H:%M"),
                              window=SCHEDULER_RHYTHM_WINDOW)
         else:
-            _log(f"[Brain][V8] 今日首条消息在 {hour}:xx，不更新 wake_time")
+            logger.debug("[Brain][V8] first message today at %s:xx, skip wake_time update", hour)
 
         # 周末偏移统计（同样只在合理时间窗口内更新）
         if now.weekday() >= 5 and 5 <= hour <= 13:
@@ -1583,8 +1559,8 @@ def _update_user_rhythm(state):
     rhythm["_last_active_time"] = now.strftime("%H:%M")
     rhythm["_last_active_date"] = today_str
 
-    _log(f"[Brain][V8] 节奏更新: hour={hour}, wake={rhythm.get('avg_wake_time', 'N/A')}, "
-         f"sleep={rhythm.get('avg_sleep_time', 'N/A')}")
+    logger.debug("[Brain][V8] rhythm update: hour=%s, wake=%s, sleep=%s",
+                 hour, rhythm.get("avg_wake_time", "N/A"), rhythm.get("avg_sleep_time", "N/A"))
 
 
 def _update_avg_time(rhythm, key, new_time_str, window=7):

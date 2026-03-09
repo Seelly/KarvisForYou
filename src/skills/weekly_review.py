@@ -12,16 +12,12 @@ Skill: weekly.review
 5. 决策日志（skill 使用统计）
 6. state.mood_scores（情绪评分数组）
 """
-import sys
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
+from log_utils import BEIJING_TZ, get_logger
 
-BEIJING_TZ = timezone(timedelta(hours=8))
-
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def execute(params, state, ctx):
@@ -49,13 +45,13 @@ def execute(params, state, ctx):
     period_str = f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
     dates = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
 
-    _log(f"[weekly.review] 生成周报: {period_str}")
+    logger.info("生成周报: %s", period_str)
 
     # 1. 并发收集 7 天数据
     data = _collect_week_data(dates, state, ctx)
 
     if not data["notes"].strip():
-        _log("[weekly.review] 本周没有记录")
+        logger.info("本周没有记录")
         return {"success": True, "reply": f"本周（{period_str}）没有记录，无法生成周报"}
 
     # 2. AI 分析
@@ -73,7 +69,7 @@ def execute(params, state, ctx):
     ok = _write_weekly_review(ctx, file_path, review_md)
 
     if ok:
-        _log(f"[weekly.review] 周报已写入: {file_path}")
+        logger.info("周报已写入: %s", file_path)
         mood_avg = analysis.get("mood_avg", "?")
         insight = analysis.get("insight", "")[:60]
         return {
@@ -113,7 +109,8 @@ def _collect_week_data(dates, state, ctx):
     for k, fut in futures.items():
         try:
             results[k] = fut.result(timeout=30) or ""
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to get future result: %s", e)
             results[k] = ""
 
     # 组装各天的笔记
@@ -213,7 +210,8 @@ def _extract_decision_stats(text, dates):
                 skill = entry.get("skill", "unknown")
                 skill_counts[skill] = skill_counts.get(skill, 0) + 1
                 total += 1
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipping invalid decision log line: %s", e)
             pass
     return {"skill_counts": skill_counts, "total_decisions": total}
 
@@ -263,15 +261,17 @@ def _ai_analyze_week(data, period_str, dates, call_deepseek):
         text = "\n".join(lines).strip()
     try:
         return json.loads(text)
-    except Exception:
+    except Exception as e:
+        logger.warning("JSON parse failed, trying extraction: %s", e)
         start = text.find("{")
         end = text.rfind("}")
         if start >= 0 and end > start:
             try:
                 return json.loads(text[start:end + 1])
-            except Exception:
+            except Exception as e:
+                logger.debug("JSON extraction also failed: %s", e)
                 pass
-    _log(f"[weekly.review] AI 分析 JSON 解析失败: {text[:200]}")
+    logger.warning("AI 分析 JSON 解析失败: %s", text[:200])
     return None
 
 

@@ -9,18 +9,18 @@ Skill: finance.monthly
 
 V12 移植：handler 签名 (params, state, ctx)，IO 通过 ctx.IO。
 """
-import sys
 import json
 import calendar
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from finance_utils import (
     load_finance_data, parse_date, parse_amount,
     filter_bills, summarize_bills,
     group_snapshots_by_date, calc_snapshot_summary, compare_snapshots,
-    format_currency, normalize_date_str, _log
+    format_currency, normalize_date_str
 )
+from log_utils import BEIJING_TZ, get_logger
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+logger = get_logger(__name__)
 
 
 def execute(params, state, ctx):
@@ -46,7 +46,7 @@ def execute(params, state, ctx):
         return {"success": False, "reply": f"月份格式错误：{month_str}"}
 
     period_str = f"{year}年{month}月"
-    _log(f"[finance.monthly] 生成财务月报: {period_str}")
+    logger.info("[finance.monthly] 生成财务月报: %s", period_str)
 
     # 1. 先自动导入最新 iCost 数据
     import_result = _auto_import(ctx)
@@ -151,7 +151,7 @@ def execute(params, state, ctx):
     ok = ctx.IO.write_text(file_path, report_md)
 
     if not ok:
-        _log(f"[finance.monthly] 报告写入失败: {file_path}")
+        logger.warning("[finance.monthly] 报告写入失败: %s", file_path)
 
     # 11. 构建企微推送摘要
     wechat_summary = _build_wechat_summary(
@@ -159,7 +159,7 @@ def execute(params, state, ctx):
         snapshot_comparison, insights
     )
 
-    _log(f"[finance.monthly] 月报生成完成: {period_str}")
+    logger.info("[finance.monthly] 月报生成完成: %s", period_str)
 
     return {
         "success": True,
@@ -176,11 +176,11 @@ def _auto_import(ctx):
             agent_ctx = result.get("agent_context", {})
             new_count = agent_ctx.get("total_new_records", 0)
             if new_count > 0:
-                _log(f"[finance.monthly] 自动导入: 新增 {new_count} 条")
+                logger.info("[finance.monthly] 自动导入: 新增 %s 条", new_count)
                 return {"imported": True, "new_count": new_count}
         return {"imported": False, "new_count": 0}
     except Exception as e:
-        _log(f"[finance.monthly] 自动导入异常: {e}")
+        logger.exception("[finance.monthly] 自动导入异常: %s", e)
         return {"imported": False, "new_count": 0, "error": str(e)}
 
 
@@ -290,19 +290,21 @@ def _ai_generate_insights(report_ctx):
             text = "\n".join(lines).strip()
         try:
             return json.loads(text)
-        except Exception:
+        except Exception as e:
+            logger.warning("JSON parse failed, trying extraction: %s", e)
             start = text.find("{")
             end = text.rfind("}")
             if start >= 0 and end > start:
                 try:
                     return json.loads(text[start:end + 1])
-                except Exception:
+                except Exception as e:
+                    logger.debug("JSON extraction also failed: %s", e)
                     pass
-        _log(f"[finance.monthly] AI 洞察 JSON 解析失败: {text[:200]}")
+        logger.warning("[finance.monthly] AI 洞察 JSON 解析失败: %s", text[:200])
         return None
 
     except Exception as e:
-        _log(f"[finance.monthly] AI 洞察生成异常: {e}")
+        logger.exception("[finance.monthly] AI 洞察生成异常: %s", e)
         return None
 
 

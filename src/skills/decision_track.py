@@ -24,14 +24,11 @@ state.pending_decisions 结构：
     }
 ]
 """
-import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+from log_utils import BEIJING_TZ, get_logger
 
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def _gen_id(state):
@@ -45,7 +42,8 @@ def _gen_id(state):
             num = int(did.replace("d", ""))
             if num > max_id:
                 max_id = num
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipping invalid decision ID: %s", e)
             pass
     return f"d{max_id + 1:03d}"
 
@@ -88,7 +86,8 @@ def record(params, state, ctx):
     }
     decisions.append(entry)
 
-    _log(f"[decision_track] 记录决策: {did} — {topic}, 复盘日 {review_date}")
+    logger.info("[decision_track] 记录决策: %s — %s, 复盘日 %s",
+                did, topic, review_date)
 
     emotion_str = f"（{emotion}）" if emotion else ""
     reply = (
@@ -146,7 +145,7 @@ def review(params, state, ctx):
     # 移到历史
     _archive_decision(state, target)
 
-    _log(f"[decision_track] 复盘完成: {target['id']} — {result}")
+    logger.info("[decision_track] 复盘完成: %s — %s", target['id'], result)
 
     reply = (
         f"📋 决策复盘完成~\n\n"
@@ -199,7 +198,8 @@ def list_decisions(params, state, ctx):
                 else:
                     days_left = (rd - today).days
                     overdue = f" ({days_left}天后复盘)"
-            except Exception:
+            except Exception as e:
+                logger.debug("Failed to parse review date: %s", e)
                 pass
 
         emotion_str = f"（{emotion}）" if emotion else ""

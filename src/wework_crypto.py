@@ -6,11 +6,10 @@
 import base64
 import hashlib
 import struct
-import sys
 
+from log_utils import get_logger
 
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 class WXBizMsgCrypt:
@@ -22,7 +21,7 @@ class WXBizMsgCrypt:
         try:
             self.aes_key = base64.b64decode(encoding_aes_key + "=")
         except Exception as e:
-            _log(f"AES Key 解码失败: {e}")
+            logger.error("AES Key 解码失败: %s", e)
             self.aes_key = None
 
     def _get_sha1(self, *args):
@@ -57,23 +56,23 @@ class WXBizMsgCrypt:
         """验证 URL，返回解密后的 echostr"""
         signature = self._get_sha1(self.token, timestamp, nonce, echostr)
         if signature != msg_signature:
-            _log(f"[验证] 签名不匹配: 计算={signature}, 期望={msg_signature}")
+            logger.warning("[验证] 签名不匹配: 计算=%s, 期望=%s", signature, msg_signature)
             return None
         try:
             return self._decrypt(echostr)
         except Exception as e:
-            _log(f"[验证] 解密失败: {e}")
+            logger.error("[验证] 解密失败: %s", e)
             return None
 
     def decrypt_msg(self, msg_signature, timestamp, nonce, encrypted_msg):
         """解密消息"""
         signature = self._get_sha1(self.token, timestamp, nonce, encrypted_msg)
         if signature != msg_signature:
-            _log(f"[解密] 签名不匹配")
+            logger.warning("[解密] 签名不匹配")
             return None
         try:
             msg = self._decrypt(encrypted_msg)
             return msg
         except Exception as e:
-            _log(f"[解密] 失败: {e}")
+            logger.error("[解密] 失败: %s", e)
             return None

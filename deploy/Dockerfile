@@ -1,10 +1,12 @@
 FROM python:3.11-slim
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
-# 安装依赖
-COPY src/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# 安装依赖（利用 Docker 缓存，先复制依赖描述文件）
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 # 复制代码（含 web_static/ 前端页面）
 COPY src/ ./src/
@@ -25,4 +27,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/web/login')" || exit 1
 
 # 启动（内置调度器自动启动）
-CMD ["python", "app.py"]
+CMD ["uv", "run", "--no-sync", "python", "app.py"]

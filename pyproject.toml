@@ -1,0 +1,49 @@
+[project]
+name = "karvis-for-you"
+version = "1.0.0"
+description = "Multi-user AI life assistant on WeWork/Telegram/Feishu"
+requires-python = ">=3.10"
+dependencies = [
+    "flask",
+    "requests",
+    "pycryptodome",
+    "cryptography",
+    "tencentcloud-sdk-python-asr",
+    "beautifulsoup4",
+    "apscheduler",
+    "python-dotenv",
+    "cnlunar",
+    "openpyxl",
+    "lark-oapi",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501", "B904", "SIM108"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "config", "brain", "memory", "prompts", "storage",
+    "local_io", "onedrive_io", "user_context", "channel_router",
+    "skill_loader", "finance_utils", "log_utils",
+    "telegram_bot", "feishu_bot", "wework_crypto", "web_routes",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

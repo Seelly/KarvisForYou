@@ -5,34 +5,32 @@ KarvisForAll 本地文件读写层
 """
 import os
 import json
-import sys
 import threading
 
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+from log_utils import BEIJING_TZ, get_logger
+from storage_base import StorageBackend
+
+logger = get_logger(__name__)
 
 
-class LocalFileIO:
+class LocalFileIO(StorageBackend):
     """本地文件存储"""
 
     _lock = threading.Lock()
 
-    @classmethod
-    def _resolve_path(cls, file_path):
+    def _resolve_path(self, file_path):
         """直接返回传入的路径（UserContext 已经生成了正确的绝对路径）"""
         return file_path
 
-    @classmethod
-    def get_token(cls):
+    def get_token(self):
         """兼容接口 — 本地模式不需要 token"""
         return "local"
 
     # ---- 文本文件读写 ----
 
-    @classmethod
-    def read_text(cls, file_path, _retries=3):
+    def read_text(self, file_path, _retries=3):
         """读取文本文件，返回字符串。文件不存在返回空字符串，失败返回 None"""
-        local_path = cls._resolve_path(file_path)
+        local_path = self._resolve_path(file_path)
         try:
             if not os.path.exists(local_path):
                 return ""
@@ -40,29 +38,27 @@ class LocalFileIO:
                 content = f.read()
             return content
         except Exception as e:
-            _log(f"[LocalIO] 读取异常 {file_path}: {e}")
+            logger.error("[LocalIO] 读取异常 %s: %s", file_path, e)
             return None
 
-    @classmethod
-    def write_text(cls, file_path, content, _retries=3):
+    def write_text(self, file_path, content, _retries=3):
         """写入文本文件（覆盖），返回 True/False"""
-        local_path = cls._resolve_path(file_path)
+        local_path = self._resolve_path(file_path)
         try:
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            with cls._lock:
+            with self._lock:
                 with open(local_path, "w", encoding="utf-8") as f:
                     f.write(content)
             return True
         except Exception as e:
-            _log(f"[LocalIO] 写入异常 {file_path}: {e}")
+            logger.error("[LocalIO] 写入异常 %s: %s", file_path, e)
             return False
 
     # ---- JSON 文件读写 ----
 
-    @classmethod
-    def read_json(cls, file_path):
+    def read_json(self, file_path):
         """读取 JSON 文件，返回 dict/list。文件不存在返回空 dict，失败返回 None"""
-        text = cls.read_text(file_path)
+        text = self.read_text(file_path)
         if text is None:
             return None
         if not text.strip():
@@ -70,21 +66,19 @@ class LocalFileIO:
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            _log(f"[LocalIO] JSON 解析失败 {file_path}: {e}")
+            logger.error("[LocalIO] JSON 解析失败 %s: %s", file_path, e)
             return None
 
-    @classmethod
-    def write_json(cls, file_path, data):
+    def write_json(self, file_path, data):
         """写入 JSON 文件"""
         content = json.dumps(data, ensure_ascii=False, indent=2)
-        return cls.write_text(file_path, content)
+        return self.write_text(file_path, content)
 
     # ---- 追加到文件指定 section ----
 
-    @classmethod
-    def append_to_section(cls, file_path, section_header, content):
+    def append_to_section(self, file_path, section_header, content):
         """追加内容到文件的指定 section"""
-        existing = cls.read_text(file_path)
+        existing = self.read_text(file_path)
         if existing is None:
             return False
 
@@ -102,16 +96,15 @@ class LocalFileIO:
         else:
             new_content = existing.rstrip() + f"\n\n{section_header}\n{content}\n"
 
-        return cls.write_text(file_path, new_content)
+        return self.write_text(file_path, new_content)
 
     # ---- 追加到 Quick-Notes（带去重） ----
 
-    @classmethod
-    def append_to_quick_notes(cls, file_path, message):
+    def append_to_quick_notes(self, file_path, message):
         """追加一条笔记到 Quick-Notes"""
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime
 
-        existing = cls.read_text(file_path)
+        existing = self.read_text(file_path)
         if existing is None:
             return False
 
@@ -125,11 +118,10 @@ class LocalFileIO:
             if len(lines) >= 2:
                 content_lines = '\n'.join(lines[1:]).strip().rstrip('-').strip()
                 if content_lines == message.strip():
-                    _log(f"[LocalIO] 内容重复，跳过: {message[:30]}...")
+                    logger.info("[LocalIO] 内容重复，跳过: %s...", message[:30])
                     return True
 
-        beijing_tz = timezone(timedelta(hours=8))
-        now = datetime.now(beijing_tz).strftime("%Y-%m-%d %H:%M")
+        now = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
         new_entry = f"## {now}\n\n{message}\n\n---\n\n"
 
         lines = existing.split('\n')
@@ -140,29 +132,27 @@ class LocalFileIO:
                 break
 
         new_content = '\n'.join(lines[:header_end]) + '\n\n' + new_entry + '\n'.join(lines[header_end:])
-        return cls.write_text(file_path, new_content)
+        return self.write_text(file_path, new_content)
 
     # ---- 二进制文件上传 ----
 
-    @classmethod
-    def upload_binary(cls, file_path, data, content_type="application/octet-stream"):
+    def upload_binary(self, file_path, data, content_type="application/octet-stream"):
         """上传（保存）二进制文件"""
-        local_path = cls._resolve_path(file_path)
+        local_path = self._resolve_path(file_path)
         try:
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
             with open(local_path, "wb") as f:
                 f.write(data)
             return True
         except Exception as e:
-            _log(f"[LocalIO] 二进制写入异常 {file_path}: {e}")
+            logger.error("[LocalIO] 二进制写入异常 %s: %s", file_path, e)
             return False
 
     # ---- 二进制文件下载 ----
 
-    @classmethod
-    def download_binary(cls, file_path, _retries=3):
+    def download_binary(self, file_path, _retries=3):
         """读取二进制文件内容。文件不存在返回 None。"""
-        local_path = cls._resolve_path(file_path)
+        local_path = self._resolve_path(file_path)
         try:
             if not os.path.exists(local_path):
                 return None
@@ -170,15 +160,14 @@ class LocalFileIO:
                 data = f.read()
             return data
         except Exception as e:
-            _log(f"[LocalIO] 二进制读取异常 {file_path}: {e}")
+            logger.error("[LocalIO] 二进制读取异常 %s: %s", file_path, e)
             return None
 
     # ---- 目录列表 ----
 
-    @classmethod
-    def list_children(cls, folder_path, _retries=3):
+    def list_children(self, folder_path, _retries=3):
         """列出文件夹下的子项"""
-        local_path = cls._resolve_path(folder_path)
+        local_path = self._resolve_path(folder_path)
         try:
             if not os.path.exists(local_path):
                 return []
@@ -194,5 +183,5 @@ class LocalFileIO:
                 items.append(item)
             return items
         except Exception as e:
-            _log(f"[LocalIO] 列目录异常 {folder_path}: {e}")
+            logger.error("[LocalIO] 列目录异常 %s: %s", folder_path, e)
             return None

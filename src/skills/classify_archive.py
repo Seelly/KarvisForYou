@@ -10,14 +10,11 @@ Skill: classify.archive
   fun → 02-Notes/生活趣事/{YYYY-MM-DD}.md
   misc → 00-Inbox/碎碎念.md
 """
-import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+from log_utils import BEIJING_TZ, get_logger
 
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def _build_category_map(ctx):
@@ -68,10 +65,11 @@ def execute(params, state, ctx):
             if ok:
                 if title:
                     last["title"] = title
-                _log(f"[classify.archive] 已合并到 {cat_info['label']} 最近条目: {content[:40]}")
+                logger.info("[classify.archive] 已合并到 %s 最近条目: %s",
+                            cat_info['label'], content[:40])
                 return {"success": True}
             else:
-                _log(f"[classify.archive] 合并失败，降级为新建条目")
+                logger.warning("[classify.archive] 合并失败，降级为新建条目")
 
     # ── 正常模式：新建条目 ──
     entry_title = f"### {title}" if title else f"### {time_str}"
@@ -93,7 +91,8 @@ def execute(params, state, ctx):
         ok = _append_to_dated_file(ctx, file_path, date_str, entry, cat_info)
 
     if ok:
-        _log(f"[classify.archive] 已归档到 {cat_info['label']}: {(title or content)[:40]}")
+        logger.info("[classify.archive] 已归档到 %s: %s",
+                     cat_info['label'], (title or content)[:40])
         if category != "misc" and file_path:
             state["last_archive"] = {
                 "file_path": file_path,
@@ -143,7 +142,7 @@ def _merge_to_last_entry(ctx, file_path, content, attachment, time_str):
             break
 
     if insert_idx is None:
-        _log(f"[classify.archive] merge: 找不到时间戳行，合并失败")
+        logger.warning("[classify.archive] merge: 找不到时间戳行，合并失败")
         return False
 
     # 构建要插入的补充内容

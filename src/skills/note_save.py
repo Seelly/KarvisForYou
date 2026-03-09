@@ -4,11 +4,9 @@ Skill: note.save
 将用户消息保存到 Obsidian Quick-Notes。
 支持纯文本和带附件的消息（图片/语音/视频/链接）。
 """
-import sys
+from log_utils import get_logger
 
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def execute(params, state, ctx):
@@ -32,7 +30,7 @@ def execute(params, state, ctx):
     attachment = (params.get("attachment") or "").strip()
 
     if not content and not attachment:
-        _log("[note.save] 无内容也无附件，跳过")
+        logger.info("无内容也无附件，跳过")
         return {"success": False, "reply": "没有可保存的内容"}
 
     # 构建要写入的 Markdown 文本
@@ -41,10 +39,10 @@ def execute(params, state, ctx):
     ok = ctx.IO.append_to_quick_notes(ctx.quick_notes_file, message)
 
     if ok:
-        _log(f"[note.save] 已保存: {message[:60]}...")
+        logger.info("已保存: %s...", message[:60])
         return {"success": True}
     else:
-        _log("[note.save] 保存失败")
+        logger.error("保存失败")
         return {"success": False, "reply": "保存到 Obsidian 失败，稍后会重试"}
 
 

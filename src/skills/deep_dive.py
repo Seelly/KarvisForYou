@@ -16,17 +16,14 @@ Skill: deep_dive (V3-F16)
 - 行为模式（"我在创造上花的时间"）
 - 自由话题（"回顾一下工作"）
 """
-import sys
 import json
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+from log_utils import BEIJING_TZ, get_logger
 
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def dive(params, state, ctx):
@@ -51,7 +48,7 @@ def dive(params, state, ctx):
         if not keywords:
             keywords = [topic]
 
-    _log(f"[deep_dive] 开始深潜: topic={topic}, keywords={keywords}")
+    logger.info("[deep_dive] 开始深潜: topic=%s, keywords=%s", topic, keywords)
 
     # 1. 搜索全历史数据
     raw_data = _collect_data(keywords, state, ctx)
@@ -76,7 +73,8 @@ def _collect_data(keywords, state, ctx):
     try:
         from brain import _executor
         executor = _executor
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to import brain executor, using fallback: %s", e)
         executor = ThreadPoolExecutor(max_workers=6)
 
     # 需要搜索的全量文件
@@ -104,7 +102,8 @@ def _collect_data(keywords, state, ctx):
     for k, fut in futures.items():
         try:
             results[k] = fut.result(timeout=30) or ""
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to get future result: %s", e)
             results[k] = ""
 
     # 从各文件中提取匹配关键词的片段
@@ -271,11 +270,11 @@ def _generate_report(topic, keywords, raw_data, state):
         resp = requests.post(url, headers=headers, json=data, timeout=60)
         if resp.status_code == 200:
             report = resp.json()["choices"][0]["message"]["content"].strip()
-            _log(f"[deep_dive] 报告生成完成: {len(report)} chars")
+            logger.info("[deep_dive] 报告生成完成: %d chars", len(report))
             return report
-        _log(f"[deep_dive] LLM 失败: {resp.status_code}")
+        logger.error("[deep_dive] LLM 失败: %s", resp.status_code)
     except Exception as e:
-        _log(f"[deep_dive] 分析异常: {e}")
+        logger.exception("[deep_dive] 分析异常")
     return None
 
 
@@ -299,11 +298,11 @@ tags: [deep-dive]
     try:
         ok = ctx.IO.write_text(file_path, content)
         if ok:
-            _log(f"[deep_dive] 报告已保存: {file_path}")
+            logger.info("[deep_dive] 报告已保存: %s", file_path)
         else:
-            _log(f"[deep_dive] 报告保存失败: {file_path}")
+            logger.error("[deep_dive] 报告保存失败: %s", file_path)
     except Exception as e:
-        _log(f"[deep_dive] 保存异常: {e}")
+        logger.exception("[deep_dive] 保存异常")
 
 
 # ============ Skill 热加载注册表 ============

@@ -3,15 +3,12 @@
 Skill: daily.generate
 读取当天的 Quick-Notes 和归档笔记，调用 DeepSeek 生成日报，写入 Daily Note。
 """
-import sys
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+from log_utils import BEIJING_TZ, get_logger
 
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def execute(params, state, ctx):
@@ -25,13 +22,13 @@ def execute(params, state, ctx):
     if not date_str:
         date_str = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
 
-    _log(f"[daily.generate] 开始生成 {date_str} 日报")
+    logger.info("[daily.generate] 开始生成 %s 日报", date_str)
 
     # 1. 收集当天所有内容
     notes = _collect_today_notes(date_str, ctx)
 
     if not notes.strip():
-        _log("[daily.generate] 今天没有笔记内容")
+        logger.info("[daily.generate] 今天没有笔记内容")
         return {"success": True, "reply": f"今天（{date_str}）还没有记录，无法生成日报"}
 
     # 2. 调用 AI 分析
@@ -49,7 +46,7 @@ def execute(params, state, ctx):
     ok = _write_daily_note(ctx, file_path, date_str, daily_md)
 
     if ok:
-        _log(f"[daily.generate] 日报已写入: {file_path}")
+        logger.info("[daily.generate] 日报已写入: %s", file_path)
         mood = analysis.get("mood", "")
         summary = analysis.get("summary", "")[:60]
         return {"success": True, "reply": f"日报已生成 {mood}\n{summary}"}
@@ -83,7 +80,8 @@ def _collect_today_notes(date_str, ctx):
     for key, fut in futures.items():
         try:
             results[key] = fut.result(timeout=30) or ""
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to get future result: %s", e)
             results[key] = ""
 
     parts = []
@@ -140,15 +138,17 @@ def _ai_analyze(notes, date_str, call_deepseek):
         text = "\n".join(lines).strip()
     try:
         return json.loads(text)
-    except Exception:
+    except Exception as e:
+        logger.warning("JSON parse failed, trying extraction: %s", e)
         start = text.find("{")
         end = text.rfind("}")
         if start >= 0 and end > start:
             try:
                 return json.loads(text[start:end + 1])
-            except Exception:
+            except Exception as e:
+                logger.debug("JSON extraction also failed: %s", e)
                 pass
-    _log(f"[daily.generate] AI 分析 JSON 解析失败: {text[:200]}")
+    logger.error("[daily.generate] AI 分析 JSON 解析失败: %s", text[:200])
     return None
 
 

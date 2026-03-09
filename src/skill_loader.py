@@ -9,15 +9,11 @@ SKILL_REGISTRY 支持两种格式：
   新格式: {"skill.name": {"handler": handler_fn, "visibility": "private", "description": "...", ...}}
 """
 import os
-import sys
 import importlib
-from datetime import datetime, timezone, timedelta
 
-_BEIJING_TZ = timezone(timedelta(hours=8))
+from log_utils import get_logger
 
-def _log(msg):
-    ts = datetime.now(_BEIJING_TZ).strftime("%H:%M:%S")
-    print(f"{ts} {msg}", file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 _cached_registry = None   # {name: handler}
@@ -36,7 +32,7 @@ def _normalize_entry(skill_name, entry):
         meta.setdefault("visibility", "public")
         return handler, meta
     else:
-        _log(f"[SkillLoader] 警告: skill '{skill_name}' 注册格式异常，跳过")
+        logger.warning("[SkillLoader] 警告: skill '%s' 注册格式异常，跳过", skill_name)
         return None, None
 
 
@@ -68,19 +64,19 @@ def load_skill_registry():
                     if handler is None:
                         continue
                     if skill_name in registry:
-                        _log(f"[SkillLoader] 警告: skill '{skill_name}' 重复注册，"
-                             f"来自 {module_name}，覆盖已有")
+                        logger.warning("[SkillLoader] 警告: skill '%s' 重复注册，来自 %s，覆盖已有",
+                                   skill_name, module_name)
                     registry[skill_name] = handler
                     metadata[skill_name] = meta
                 loaded_modules.append(filename[:-3])
         except Exception as e:
-            _log(f"[SkillLoader] 加载 {module_name} 失败: {e}")
+            logger.error("[SkillLoader] 加载 %s 失败: %s", module_name, e)
 
     # 内置 ignore handler
     registry["ignore"] = lambda params, state, ctx: {"success": True}
     metadata["ignore"] = {"visibility": "public"}
 
-    _log(f"[SkillLoader] 已加载 {len(loaded_modules)} 个模块, 共 {len(registry)} 个 skill")
+    logger.info("[SkillLoader] 已加载 %d 个模块, 共 %d 个 skill", len(loaded_modules), len(registry))
     _cached_registry = registry
     _cached_metadata = metadata
     return registry

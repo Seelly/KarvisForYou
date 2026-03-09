@@ -25,16 +25,13 @@ tags: [voice-journal]
 **情绪轨迹**：xxx → xxx → xxx
 **关键洞察**：xxx
 """
-import sys
 import json
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+from log_utils import BEIJING_TZ, get_logger
 
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 def journal(params, state, ctx):
@@ -135,11 +132,11 @@ def _analyze_voice(asr_text, state):
             end = text.rfind("}")
             if start >= 0 and end > start:
                 result = json.loads(text[start:end + 1])
-                _log(f"[voice_journal] 分析完成: theme={result.get('theme', '')}")
+                logger.info("分析完成: theme=%s", result.get("theme", ""))
                 return result
-        _log(f"[voice_journal] LLM 分析失败: {resp.status_code}")
+        logger.error("LLM 分析失败: %s", resp.status_code)
     except Exception as e:
-        _log(f"[voice_journal] 分析异常: {e}")
+        logger.exception("分析异常: %s", e)
     return None
 
 
@@ -209,13 +206,13 @@ def _write_journal_file(date_str, content, ctx):
             # 文件不存在或为空，写入
             ok = ctx.IO.write_text(file_path, content)
             if ok:
-                _log(f"[voice_journal] 写入: {file_path}")
+                logger.info("写入: %s", file_path)
                 return file_path
             else:
-                _log(f"[voice_journal] 写入失败: {file_path}")
+                logger.error("写入失败: %s", file_path)
                 return None
 
-    _log(f"[voice_journal] 当天已有 5 篇语音日记，跳过")
+    logger.warning("当天已有 5 篇语音日记，跳过")
     return None
 
 

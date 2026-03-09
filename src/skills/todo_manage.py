@@ -11,17 +11,14 @@ Skill: todo.*
   recur    — 循环规则 daily/weekday/weekly/monthly/""（可选）
   recur_spec — 循环细节 {cycle_on, cycle_off, start_date, weekdays}（可选）
 """
-import sys
 import re
-from datetime import datetime, timezone, timedelta, date as _date
+from datetime import datetime, timedelta, date as _date
 
-BEIJING_TZ = timezone(timedelta(hours=8))
+from log_utils import BEIJING_TZ, get_logger
+
+logger = get_logger(__name__)
 
 _ID_COUNTER = 0
-
-
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
 
 
 def _now():
@@ -372,11 +369,12 @@ def _migrate_reminders_to_todos(state, ctx=None, todo_file=None):
                     }
                     todos.append(t)
         except Exception as e:
-            _log(f"[todo.migrate] 扫描 Todo.md 失败: {e}")
+            logger.exception("扫描 Todo.md 失败: %s", e)
 
     state["todos"] = todos
     state.pop("reminders", None)
-    _log(f"[todo.migrate] 迁移完成: {len(old_reminders)} 条 reminders + Todo.md → {len(todos)} 条 todos")
+    logger.info("迁移完成: %d 条 reminders + Todo.md -> %d 条 todos",
+                len(old_reminders), len(todos))
     return True
 
 
@@ -498,7 +496,7 @@ def add(params, state, ctx):
     ok = ctx.IO.write_text(ctx.todo_file, new_text)
 
     if ok:
-        _log(f"[todo.add] 已添加: {content}" + (f" recur={recur}" if recur else ""))
+        logger.info("已添加: %s%s", content, " recur=%s" % recur if recur else "")
         return {"success": True, "state_updates": {"todos": todos}}
     else:
         return {"success": False, "reply": "写入 Todo.md 失败"}
@@ -572,7 +570,7 @@ def complete(params, state, ctx):
             if checkin_names:
                 names = "、".join(f"「{c[:20]}」" for c in checkin_names)
                 parts.append(f"今日打卡 {len(checkin_names)} 条 🔁\n{names}")
-            _log(f"[todo.done] 批量: done={len(completed_names)}, checkin={len(checkin_names)}")
+            logger.info("批量: done=%d, checkin=%d", len(completed_names), len(checkin_names))
             return {"success": True, "reply": "\n".join(parts), "state_updates": {"todos": todos}}
         return {"success": False, "reply": "写入 Todo.md 失败"}
 
@@ -593,7 +591,7 @@ def complete(params, state, ctx):
         if matched_todo and matched_todo.get("recur"):
             # 循环待办：打卡
             matched_todo["last_completed"] = _now_str()
-            _log(f"[todo.done] 循环打卡: {item['content']}")
+            logger.info("循环打卡: %s", item["content"])
             return {
                 "success": True,
                 "reply": f"今天的「{item['content']}」已打卡 ✅🔁",
@@ -613,7 +611,7 @@ def complete(params, state, ctx):
             new_text = _rebuild_todo_md(doing, done)
             ok = ctx.IO.write_text(ctx.todo_file, new_text)
             if ok:
-                _log(f"[todo.done] 已完成: {item['content']}")
+                logger.info("已完成: %s", item["content"])
                 return {
                     "success": True,
                     "reply": f"已完成「{item['content']}」✅",
@@ -757,9 +755,9 @@ def check_todos(state, ctx=None, todo_file=None):
                         cross_cleaned += 1
                 todos = new_todos
                 if cross_cleaned > 0:
-                    _log(f"[todo.check] 交叉验证清理 {cross_cleaned} 条已手动完成的待办")
+                    logger.info("交叉验证清理 %d 条已手动完成的待办", cross_cleaned)
         except Exception as e:
-            _log(f"[todo.check] 读取 Todo.md 交叉验证失败: {e}")
+            logger.exception("读取 Todo.md 交叉验证失败: %s", e)
 
     now = _now()
     today_str = now.strftime("%Y-%m-%d")
@@ -838,7 +836,7 @@ def check_todos(state, ctx=None, todo_file=None):
                 try:
                     due_dt = datetime.strptime(due, "%Y-%m-%d").date()
                     if (now.date() - due_dt).days > 30:
-                        _log(f"[todo.check] 清理过期待办: {t['content']}")
+                        logger.info("清理过期待办: %s", t["content"])
                         continue
                 except ValueError:
                     pass
@@ -853,7 +851,7 @@ def check_todos(state, ctx=None, todo_file=None):
         state["todos"] = todos
         state_updates["todos"] = todos
 
-    _log(f"[todo.check] 检查 {len(todos)} 条待办, 推送 {len(messages)} 条")
+    logger.info("检查 %d 条待办, 推送 %d 条", len(todos), len(messages))
     return {"messages": messages, "state_updates": state_updates}
 
 
@@ -899,7 +897,7 @@ def remind_cancel(params, state, ctx):
 
     if cancelled:
         names = "、".join(f"「{c}」" for c in cancelled)
-        _log(f"[todo.remind_cancel] 已取消: {names}")
+        logger.info("已取消: %s", names)
 
         try:
             text = ctx.IO.read_text(ctx.todo_file)
@@ -913,7 +911,7 @@ def remind_cancel(params, state, ctx):
                 new_text = _rebuild_todo_md(doing, done)
                 ctx.IO.write_text(ctx.todo_file, new_text)
         except Exception as e:
-            _log(f"[todo.remind_cancel] 更新 Todo.md 失败: {e}")
+            logger.exception("更新 Todo.md 失败: %s", e)
 
         return {
             "success": True,

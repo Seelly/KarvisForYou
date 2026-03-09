@@ -4,15 +4,17 @@ KarvisForAll 记忆管理（多用户版）
 缓存按 user_id 分区，所有函数接收 UserContext。
 """
 import time
-import sys
 import os
 import copy
 import threading
+from datetime import datetime
+
 from config import RECENT_MESSAGES_LIMIT, PROMPT_CACHE_TTL, STATE_CACHE_TTL
+from log_utils import BEIJING_TZ, get_logger
+from storage import create_storage
 import json as _json
 
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+logger = get_logger(__name__)
 
 
 # ============ Prompt 缓存（按 file_path，多用户天然隔离）============
@@ -51,13 +53,13 @@ class PromptCache:
                     with self._lock:
                         self._cache[file_path] = {"content": content, "expire_time": now + PROMPT_CACHE_TTL}
                     return content
-        except Exception:
+        except Exception as e:
+            logger.debug("读取 /tmp 磁盘缓存失败: %s", e)
             pass
 
         # 3. 通过 IO 对象回源读取
         if io is None:
-            from storage import create_storage
-            io = create_storage()
+            io = create_storage("local")
         content = io.read_text(file_path)
         if content is not None:
             with self._lock:
@@ -65,7 +67,8 @@ class PromptCache:
             try:
                 with open(tmp_file, "w", encoding="utf-8") as f:
                     f.write(content)
-            except Exception:
+            except Exception as e:
+                logger.debug("写入 /tmp 磁盘缓存失败: %s", e)
                 pass
         return content or ""
 
@@ -78,14 +81,16 @@ class PromptCache:
                     tmp_file = self._tmp_path(file_path)
                     if os.path.exists(tmp_file):
                         os.remove(tmp_file)
-                except Exception:
+                except Exception as e:
+                    logger.debug("删除 /tmp 缓存文件失败: %s", e)
                     pass
             else:
                 self._cache.clear()
                 try:
                     for f in os.listdir(_TMP_CACHE_DIR):
                         os.remove(os.path.join(_TMP_CACHE_DIR, f))
-                except Exception:
+                except Exception as e:
+                    logger.debug("清除 /tmp 缓存目录失败: %s", e)
                     pass
 
 
@@ -122,9 +127,7 @@ def format_recent_messages(state):
 
 def add_message_to_state(state, role, content):
     """往 state 的对话窗口中追加一条消息。"""
-    from datetime import datetime, timezone, timedelta
-    beijing_tz = timezone(timedelta(hours=8))
-    now_str = datetime.now(beijing_tz).strftime("%Y-%m-%d %H:%M")
+    now_str = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
 
     messages = state.setdefault("recent_messages", [])
     messages.append({
@@ -177,7 +180,7 @@ def maybe_compress_messages(messages):
     }
 
     result = [summary_msg] + to_keep
-    _log(f"[记忆] 对话压缩: {len(to_compress)} 条 → 1 条摘要, 保留 {len(to_keep)} 条原始")
+    logger.info("[记忆] 对话压缩: %d 条 → 1 条摘要, 保留 %d 条原始", len(to_compress), len(to_keep))
     return result
 
 
@@ -191,13 +194,13 @@ def apply_memory_updates(updates, ctx):
     memory_file = ctx.memory_file
     memory_text = ctx.IO.read_text(memory_file)
     if memory_text is None:
-        _log(f"[记忆] 无法读取 memory.md ({ctx.user_id})，跳过记忆更新")
+        logger.warning("[记忆] 无法读取 memory.md (%s)，跳过记忆更新", ctx.user_id)
         return
 
     changed = False
     for item in updates:
         if isinstance(item, str):
-            _log(f"[记忆] 跳过非法格式的 memory_update: {item[:50]}")
+            logger.warning("[记忆] 跳过非法格式的 memory_update: %s", item[:50])
             continue
         if not isinstance(item, dict):
             continue
@@ -224,7 +227,7 @@ def apply_memory_updates(updates, ctx):
             if len(new_lines) != len(lines):
                 memory_text = before + section_header + "\n".join(new_lines) + rest
                 changed = True
-                _log(f"[记忆] 删除: section={section}, keyword={content}")
+                logger.info("[记忆] 删除: section=%s, keyword=%s", section, content)
             continue
 
         if section_header in memory_text:
@@ -239,7 +242,7 @@ def apply_memory_updates(updates, ctx):
 
                 existing_lines = section_body.lower()
                 if dedup_key in existing_lines:
-                    _log(f"[记忆] 去重跳过: section={section}, key={dedup_key}")
+                    logger.debug("[记忆] 去重跳过: section=%s, key=%s", section, dedup_key)
                     continue
 
                 memory_text = before + section_header + section_body.rstrip() + f"\n- {content}\n" + rest
@@ -262,10 +265,10 @@ def apply_memory_updates(updates, ctx):
     if changed:
         ok = ctx.IO.write_text(memory_file, memory_text)
         if ok:
-            _log(f"[记忆] memory.md 已更新 ({ctx.user_id}): {len(updates)} 条")
+            logger.info("[记忆] memory.md 已更新 (%s): %d 条", ctx.user_id, len(updates))
             _prompt_cache.invalidate(memory_file)
         else:
-            _log(f"[记忆] memory.md 写入失败 ({ctx.user_id})")
+            logger.error("[记忆] memory.md 写入失败 (%s)", ctx.user_id)
 
 
 # ============ State 缓存（按 user_id 分区）============
@@ -284,7 +287,7 @@ def read_state_cached(ctx):
     with _state_lock:
         cached = _state_cache.get(uid)
         if cached and cached["data"] is not None and cached["expire_time"] > now:
-            _log(f"[State] 命中内存缓存 ({uid})")
+            logger.debug("[State] 命中内存缓存 (%s)", uid)
             return copy.deepcopy(cached["data"])
 
     # 2. /tmp 磁盘缓存
@@ -297,15 +300,16 @@ def read_state_cached(ctx):
                     data = _json.load(f)
                 with _state_lock:
                     _state_cache[uid] = {"data": data, "expire_time": now + STATE_CACHE_TTL}
-                _log(f"[State] 命中 /tmp 缓存 ({uid})")
+                logger.debug("[State] 命中 /tmp 缓存 (%s)", uid)
                 return copy.deepcopy(data)
-    except Exception:
+    except Exception as e:
+        logger.debug("读取 /tmp state 缓存失败: %s", e)
         pass
 
     # 3. 通过 IO 回源读取
     data = ctx.IO.read_json(ctx.state_file) or {}
     _update_state_cache(uid, data)
-    _log(f"[State] 从文件读取 ({uid})")
+    logger.debug("[State] 从文件读取 (%s)", uid)
     return copy.deepcopy(data)
 
 
@@ -319,7 +323,8 @@ def _update_state_cache(uid, state):
         os.makedirs(_TMP_CACHE_DIR, exist_ok=True)
         with open(tmp_file, "w", encoding="utf-8") as f:
             _json.dump(state, f, ensure_ascii=False)
-    except Exception:
+    except Exception as e:
+        logger.debug("写入 /tmp state 缓存失败: %s", e)
         pass
 
 
@@ -334,4 +339,4 @@ def invalidate_all_caches():
     _prompt_cache.invalidate()
     with _state_lock:
         _state_cache.clear()
-    _log("[Memory] 全部缓存已清除")
+    logger.info("[Memory] 全部缓存已清除")

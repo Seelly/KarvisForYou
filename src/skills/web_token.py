@@ -4,10 +4,10 @@ Web 查看令牌 Skill
 用户说"给我查看链接"时生成带 token 的 Web 访问 URL。
 """
 import os
-import sys
 
-def _log(msg):
-    print(msg, file=sys.stderr, flush=True)
+from log_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 def generate_web_token(params, state, ctx):
@@ -18,7 +18,7 @@ def generate_web_token(params, state, ctx):
     from user_context import generate_token
 
     user_id = ctx.user_id
-    _log(f"[web.token] 为用户 {user_id} 生成 Web 访问令牌")
+    logger.info("为用户 %s 生成 Web 访问令牌", user_id)
 
     token = generate_token(user_id)
 
@@ -40,7 +40,7 @@ def generate_web_token(params, state, ctx):
     scheme = "http" if _is_ip or "127.0.0.1" in domain or "localhost" in domain else "https"
     url = f"{scheme}://{domain}/web/login?token={token}"
 
-    _log(f"[web.token] 令牌已生成: user={user_id}, url={url[:80]}...")
+    logger.info("令牌已生成: user=%s, url=%s...", user_id, url[:80])
 
     nickname = ctx.get_nickname() or "你"
     reply = (

@@ -21,72 +21,47 @@ echo -e "${CYAN}${BOLD}║   你的 AI 生活助手，住在企业微信里     
 echo -e "${CYAN}${BOLD}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 
-# ============ Step 0: 检查 Python ============
-echo -e "${BOLD}[1/6] 检查 Python 环境...${NC}"
-
-PYTHON_CMD=""
-if command -v python3 &>/dev/null; then
-    PYTHON_CMD="python3"
-elif command -v python &>/dev/null; then
-    PYTHON_CMD="python"
-fi
-
-if [ -z "$PYTHON_CMD" ]; then
-    echo -e "${RED}未找到 Python！请先安装 Python 3.9+${NC}"
-    echo "  macOS:   brew install python3"
-    echo "  Ubuntu:  sudo apt install python3 python3-pip"
-    echo "  Windows: https://www.python.org/downloads/"
-    exit 1
-fi
-
-PY_VERSION=$($PYTHON_CMD --version 2>&1 | awk '{print $2}')
-PY_MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
-PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
-
-if [ "$PY_MAJOR" -lt 3 ] || ([ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 9 ]); then
-    echo -e "${RED}Python 版本过低: $PY_VERSION（需要 3.9+）${NC}"
-    exit 1
-fi
-
-echo -e "  ${GREEN}✓ Python $PY_VERSION${NC}"
-
-# ============ Step 1: 安装依赖（自动处理虚拟环境） ============
-echo ""
-echo -e "${BOLD}[2/6] 安装 Python 依赖...${NC}"
-
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_ROOT"
 
-# 检测是否需要虚拟环境（Ubuntu 24+ 等 PEP 668 环境）
-USE_VENV=false
-if $PYTHON_CMD -m pip install --dry-run flask 2>&1 | grep -q "externally-managed-environment"; then
-    USE_VENV=true
+# ============ Step 0: 检查/安装 uv ============
+echo -e "${BOLD}[1/6] 检查 uv 环境...${NC}"
+
+if command -v uv &>/dev/null; then
+    UV_VERSION=$(uv --version 2>&1)
+    echo -e "  ${GREEN}✓ $UV_VERSION${NC}"
+else
+    echo -e "  ${CYAN}未找到 uv，正在安装...${NC}"
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    # 刷新 PATH（安装脚本会提示，但当前 shell 需要手动加载）
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    if command -v uv &>/dev/null; then
+        echo -e "  ${GREEN}✓ uv 安装成功: $(uv --version)${NC}"
+    else
+        echo -e "${RED}uv 安装失败！请手动安装: https://docs.astral.sh/uv/getting-started/installation/${NC}"
+        exit 1
+    fi
 fi
 
-if [ "$USE_VENV" = true ] || [ -d "$PROJECT_ROOT/venv" ]; then
-    echo -e "  ${CYAN}检测到需要虚拟环境，正在创建...${NC}"
-    $PYTHON_CMD -m venv "$PROJECT_ROOT/venv"
-    source "$PROJECT_ROOT/venv/bin/activate"
-    PYTHON_CMD="python3"
-    echo -e "  ${GREEN}✓ 虚拟环境已创建${NC}"
-fi
+# ============ Step 1: 安装依赖 ============
+echo ""
+echo -e "${BOLD}[2/6] 安装 Python 依赖...${NC}"
 
-cd "$PROJECT_ROOT/src"
-$PYTHON_CMD -m pip install -r requirements.txt -q 2>&1 | tail -3
+uv sync 2>&1 | tail -5
 echo -e "  ${GREEN}✓ 依赖安装完成${NC}"
 
 # ============ Step 2: 配置环境变量 ============
 echo ""
 echo -e "${BOLD}[3/6] 配置环境变量${NC}"
 
-ENV_FILE=".env"
+ENV_FILE="$PROJECT_ROOT/.env"
 
 if [ -f "$ENV_FILE" ]; then
-    echo -e "  ${YELLOW}已存在 .env 文件，跳过配置（如需修改请手动编辑 src/.env）${NC}"
+    echo -e "  ${YELLOW}已存在 .env 文件，跳过配置（如需修改请手动编辑 .env）${NC}"
 else
     echo ""
     echo -e "${CYAN}接下来需要填写几个必要的配置。${NC}"
-    echo -e "${CYAN}不确定的项可以直接回车跳过，之后手动编辑 src/.env${NC}"
+    echo -e "${CYAN}不确定的项可以直接回车跳过，之后手动编辑 .env${NC}"
     echo ""
 
     # 必填项读取函数（不允许为空）
@@ -226,10 +201,10 @@ echo ""
 echo -e "${BOLD}[4/6] 检查存储模式...${NC}"
 
 if grep -q "ONEDRIVE_CLIENT_ID=$" "$ENV_FILE" 2>/dev/null || grep -q 'ONEDRIVE_CLIENT_ID=""' "$ENV_FILE" 2>/dev/null || ! grep -q "ONEDRIVE_CLIENT_ID" "$ENV_FILE" 2>/dev/null; then
-    echo -e "  ${CYAN}📁 Lite 模式: 笔记保存在项目根目录 my_life/ 文件夹${NC}"
+    echo -e "  ${CYAN}Lite 模式: 笔记保存在项目根目录 my_life/ 文件夹${NC}"
     echo -e "  ${YELLOW}   后续想同步到 Obsidian？配置 OneDrive 即可无缝切换${NC}"
 else
-    echo -e "  ${GREEN}☁️  OneDrive 模式: 笔记自动同步到 Obsidian Vault${NC}"
+    echo -e "  ${GREEN}OneDrive 模式: 笔记自动同步到 Obsidian Vault${NC}"
 fi
 
 # ============ Step 4: 安装内网穿透工具 ============
@@ -297,12 +272,7 @@ if [[ "$START_NOW" == "y" || "$START_NOW" == "Y" ]]; then
 
     # 启动 Karvis
     echo -e "${GREEN}启动 Karvis...${NC}"
-    # 如果有虚拟环境，确保已激活
-    if [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
-        source "$PROJECT_ROOT/venv/bin/activate"
-        PYTHON_CMD="python3"
-    fi
-    $PYTHON_CMD app.py &
+    uv run --directory "$PROJECT_ROOT/src" python app.py &
     KARVIS_PID=$!
     sleep 2
 
@@ -322,7 +292,7 @@ if [[ "$START_NOW" == "y" || "$START_NOW" == "Y" ]]; then
         TUNNEL_LOG=$(mktemp /tmp/karvis_tunnel_XXXXXX.log)
         cloudflared tunnel --url http://localhost:9000 > "$TUNNEL_LOG" 2>&1 &
         TUNNEL_PID=$!
-        
+
         # 等待 URL 出现（从 cloudflared 日志中提取）
         echo -e "  ${YELLOW}等待隧道建立...${NC}"
         TUNNEL_URL=""
@@ -338,21 +308,20 @@ if [[ "$START_NOW" == "y" || "$START_NOW" == "Y" ]]; then
         if [ -n "$TUNNEL_URL" ]; then
             # 自动更新 .env 中的 WEB_DOMAIN 和 PROCESS_ENDPOINT_URL
             TUNNEL_DOMAIN=$(echo "$TUNNEL_URL" | sed 's|https://||')
-            cd "$PROJECT_ROOT/src"
             # 移除旧的 WEB_DOMAIN 和 PROCESS_ENDPOINT_URL（如果有）
-            sed -i.bak '/^WEB_DOMAIN=/d' .env 2>/dev/null
-            sed -i.bak '/^PROCESS_ENDPOINT_URL=/d' .env 2>/dev/null
-            rm -f .env.bak
+            sed -i.bak '/^WEB_DOMAIN=/d' "$ENV_FILE" 2>/dev/null
+            sed -i.bak '/^PROCESS_ENDPOINT_URL=/d' "$ENV_FILE" 2>/dev/null
+            rm -f "${ENV_FILE}.bak"
             # 写入新值
-            echo "WEB_DOMAIN=${TUNNEL_DOMAIN}" >> .env
-            echo "PROCESS_ENDPOINT_URL=${TUNNEL_URL}/process" >> .env
+            echo "WEB_DOMAIN=${TUNNEL_DOMAIN}" >> "$ENV_FILE"
+            echo "PROCESS_ENDPOINT_URL=${TUNNEL_URL}/process" >> "$ENV_FILE"
             echo -e "  ${GREEN}✓ 已自动更新 .env: WEB_DOMAIN=${TUNNEL_DOMAIN}${NC}"
             echo ""
 
             # 重启 Karvis 使新配置生效
             kill $KARVIS_PID 2>/dev/null
             sleep 1
-            $PYTHON_CMD app.py &
+            uv run --directory "$PROJECT_ROOT/src" python app.py &
             KARVIS_PID=$!
             sleep 2
             echo -e "  ${GREEN}✓ Karvis 已重启（加载新配置）${NC}"
