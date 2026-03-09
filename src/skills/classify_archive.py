@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Skill: classify.archive
-将消息按分类归档到对应的 Obsidian 笔记目录。
+将消息按分类归档到对应的笔记目录（存储后端由 storage_mode 决定）。
 分类由 LLM 在决策时直接给出，无需二次 AI 调用。
 
 分类:
@@ -107,7 +107,7 @@ def execute(params, state, ctx):
 
 
 def _format_attachment(attachment):
-    """将附件路径格式化为 Obsidian 嵌入语法"""
+    """将附件路径格式化为嵌入语法"""
     if not attachment:
         return None
     relative = attachment

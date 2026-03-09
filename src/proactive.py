@@ -287,7 +287,8 @@ def run_companion_check(ctx) -> str | None:
     logger.info("[Companion] 触发信号: %s", json.dumps(signals, ensure_ascii=False)[:200])
 
     context = _build_companion_context(state, ctx)
-    message = _generate_companion_message(signals, context, state)
+    storage_name = prompts.get_storage_display_name(getattr(ctx, 'storage_mode', 'local'))
+    message = _generate_companion_message(signals, context, state, storage_name=storage_name)
 
     if message:
         nudge["last_companion_time"] = now.strftime("%Y-%m-%d %H:%M")
@@ -331,10 +332,11 @@ def _build_companion_context(state: dict, ctx) -> dict:
     return context
 
 
-def _generate_companion_message(signals: list, context: dict, state: dict) -> str | None:
-    """F2: 基于信号 + 上下文，调 Qwen Flash 生成自然的关怀消息。"""
+def _generate_companion_message(signals: list, context: dict, state: dict, storage_name: str = "笔记本") -> str | None:
+    """基于信号 + 上下文，调 Qwen Flash 生成自然的关怀消息。"""
     system_parts = []
-    system_parts.append(f"## 你的人设\n{prompts.SOUL}")
+    soul = prompts.SOUL.replace("{storage_name}", storage_name)
+    system_parts.append(f"## 你的人设\n{soul}")
 
     memory = context.get("memory", "")
     if memory:

@@ -146,7 +146,7 @@ def execute(params, state, ctx):
         month_salary, trend_data, insights, import_result
     )
 
-    # 10. 写入 Obsidian
+    # 10. 写入存储后端
     file_path = f"{ctx.finance_reports_dir}/财务月报-{month_str}.md"
     ok = ctx.IO.write_text(file_path, report_md)
 
@@ -602,7 +602,7 @@ def _build_wechat_summary(period_str, bill_summary, snapshot_current,
             parts.append(f"👉 {act}")
 
     parts.append("")
-    parts.append("完整报告已写入 Obsidian 📝")
+    parts.append("完整报告已写入笔记 📝")
 
     return "\n".join(parts)
 

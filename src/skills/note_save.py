@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Skill: note.save
-将用户消息保存到 Obsidian Quick-Notes。
+将用户消息保存到 Quick-Notes（存储后端由 storage_mode 决定）。
 支持纯文本和带附件的消息（图片/语音/视频/链接）。
 """
 from log_utils import get_logger
@@ -43,19 +43,19 @@ def execute(params, state, ctx):
         return {"success": True}
     else:
         logger.error("保存失败")
-        return {"success": False, "reply": "保存到 Obsidian 失败，稍后会重试"}
+        return {"success": False, "reply": "保存失败，稍后会重试"}
 
 
 def _format_message(content, attachment):
     """
-    根据内容和附件类型格式化为 Obsidian Markdown。
-    附件路径来自 app.py 网关，已经上传到 OneDrive。
+    根据内容和附件类型格式化为 Markdown。
+    附件路径来自网关，已上传到存储后端。
     """
     if not attachment:
         return content
 
     # 从完整 OneDrive 路径中提取 attachments/xxx.ext 的相对部分
-    # 附件路径格式: /01_Obsidian/EmptyVault/00-Inbox/attachments/20260210_123456_img.jpg
+    # 附件路径格式: xxx/00-Inbox/attachments/20260210_123456_img.jpg
     relative = attachment
     if "attachments/" in attachment:
         relative = "attachments/" + attachment.split("attachments/")[-1]

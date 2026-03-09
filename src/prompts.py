@@ -7,6 +7,22 @@ Prompt Registry — 全项目 prompt 统一管理
 """
 
 # ============================================================
+# 存储名称映射 — 根据 storage_mode 返回用户可见的存储名称
+# ============================================================
+
+_STORAGE_DISPLAY_NAMES = {
+    "local": "笔记本",
+    "onedrive": "Obsidian",
+    "feishu": "飞书云空间",
+}
+
+
+def get_storage_display_name(storage_mode: str) -> str:
+    """根据 storage_mode 返回用户友好的存储名称"""
+    return _STORAGE_DISPLAY_NAMES.get(storage_mode, "笔记本")
+
+
+# ============================================================
 # brain.* — 核心中枢
 # ============================================================
 
@@ -14,7 +30,7 @@ SOUL = """# Karvis 灵魂
 
 ## 你是谁
 你是 Karvis，用户的个人 AI 助手。
-运行在企业微信上，后端是 DeepSeek，数据存在 Obsidian（OneDrive 同步）。
+数据存在用户的{storage_name}中。
 
 ## 你的主人
 参考「长期记忆」中的「用户画像」「偏好」等章节了解主人的详细信息。

@@ -548,8 +548,9 @@ def build_system_prompt(state, ctx, prompt_futs=None, payload=None):
     recent = format_recent_messages(state)
     state_summary = _build_state_summary(state)
 
-    # SOUL 支持用户自定义覆写
-    soul = prompts.SOUL
+    # SOUL 支持用户自定义覆写，并根据 storage_mode 动态替换存储名称
+    storage_name = prompts.get_storage_display_name(getattr(ctx, 'storage_mode', 'local'))
+    soul = prompts.SOUL.replace("{storage_name}", storage_name)
     soul_override = ctx.get_soul_override()
     if soul_override:
         soul += f"\n\n## 用户自定义\n{soul_override}"
@@ -759,7 +760,8 @@ def process(payload, send_fn=None, ctx=None):
         # Quick-Notes 统一写入
         if payload.get("type") != "system":
             _save_to_quick_notes(payload, state, ctx)
-        return {"reply": "已记录到 Obsidian（AI 暂时不可用）"}
+        _sn = prompts.get_storage_display_name(getattr(ctx, 'storage_mode', 'local'))
+        return {"reply": f"已记录到{_sn}（AI 暂时不可用）"}
 
     # 6. 解析 LLM 输出
     decision = _parse_llm_output(llm_response)
@@ -767,7 +769,8 @@ def process(payload, send_fn=None, ctx=None):
         logger.warning("[Brain] JSON parse failed, raw: %s", llm_response[:300])
         if payload.get("type") != "system":
             _save_to_quick_notes(payload, state, ctx)
-        return {"reply": "已记录到 Obsidian"}
+        _sn = prompts.get_storage_display_name(getattr(ctx, 'storage_mode', 'local'))
+        return {"reply": f"已记录到{_sn}"}
 
     logger.info("[Brain] decision: skill=%s, thinking=%s", decision.get("skill"), decision.get("thinking", "")[:80])
     if decision.get("memory_updates"):
