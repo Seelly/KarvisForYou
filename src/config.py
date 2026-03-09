@@ -94,6 +94,10 @@ FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
 FEISHU_ADMIN_OPEN_ID = os.environ.get("FEISHU_ADMIN_OPEN_ID", "")  # 管理员飞书 open_id，用于告警推送
 FEISHU_ADMIN_USER_ID = FEISHU_ADMIN_OPEN_ID  # 别名，供 channel/feishu.py 使用
 
+# ============ 飞书任务（Task v2）============
+# 如未配置 FEISHU_TASK_LIST_ID，则不启用“待办同步到飞书任务”功能
+FEISHU_TASK_LIST_ID = os.environ.get("FEISHU_TASK_LIST_ID", "")
+
 # ============ 飞书云空间（Drive）============
 # storage_mode=feishu 时使用；可复用飞书 Bot 的 App ID / App Secret
 # root_folder_token: 飞书云空间中作为数据根目录的文件夹 token

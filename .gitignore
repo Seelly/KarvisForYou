@@ -26,6 +26,7 @@ desktop.ini
 .idea/
 .claude
 .codebuddy
+.trae
 
 # 部署临时文件
 *.tar.gz

@@ -262,7 +262,7 @@ def _select_skill_model_tier(skill_name):
     return "main"
 
 
-def call_llm(messages, model_tier="main", max_tokens=500,
+def call_llm(messages, model_tier="main", max_tokens=3000,
              temperature=0.3, enable_thinking=None):
     """
     统一 LLM 调用入口，支持三层模型路由 + 自动降级。
@@ -296,7 +296,7 @@ def call_llm(messages, model_tier="main", max_tokens=500,
         return None
 
 
-def _call_deepseek(messages, max_tokens=500, temperature=0.3,
+def _call_deepseek(messages, max_tokens=3000, temperature=0.3,
                    enable_thinking=False):
     """调用 DeepSeek V3.2，支持 thinking 模式控制"""
     url = f"{DEEPSEEK_BASE_URL}/chat/completions"

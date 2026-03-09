@@ -203,6 +203,7 @@ def _list_skills(ctx):
         "voice": "🎙️ 语音日记",
         "settings": "⚙️ 设置",
         "web": "🔗 数据查看",
+        "feishu": "🟦 飞书文档",
         "dynamic": "🔧 动态操作",
         "internal": "📁 文件查阅",
     }

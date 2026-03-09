@@ -15,6 +15,7 @@ import re
 from datetime import datetime, timedelta, date as _date
 
 from log_utils import BEIJING_TZ, get_logger
+from feishu_task import feishu_task_client
 
 logger = get_logger(__name__)
 
@@ -478,6 +479,36 @@ def add(params, state, ctx):
         "last_completed": "",
     }
 
+    feishu_open_id = None
+    if hasattr(ctx, "config"):
+        feishu_open_id = (ctx.config.get("feishu_open_id") or "").strip() or None
+    if not feishu_open_id and getattr(ctx, "user_id", "").startswith("fs_"):
+        feishu_open_id = ctx.user_id[3:]
+    due_timestamp_ms = 0
+    if remind_at and len(remind_at) > 5:
+        try:
+            dt = datetime.strptime(remind_at, "%Y-%m-%d %H:%M")
+            dt = dt.replace(tzinfo=BEIJING_TZ)
+            due_timestamp_ms = int(dt.timestamp() * 1000)
+        except ValueError:
+            pass
+    elif due_date:
+        try:
+            dt = datetime.strptime(due_date + " 23:59:59", "%Y-%m-%d %H:%M:%S")
+            dt = dt.replace(tzinfo=BEIJING_TZ)
+            due_timestamp_ms = int(dt.timestamp() * 1000)
+        except ValueError:
+            pass
+            
+    if feishu_open_id:
+        task_guid = feishu_task_client.create_task(
+            summary=content,
+            due_timestamp_ms=due_timestamp_ms,
+            open_id=feishu_open_id
+        )
+        if task_guid:
+            todo["feishu_task_guid"] = task_guid
+
     todos = state.get("todos", [])
     todos.append(todo)
 
@@ -555,6 +586,19 @@ def complete(params, state, ctx):
                     # 从 state.todos 移除
                     if matched_todo:
                         todos.remove(matched_todo)
+                        if matched_todo.get("feishu_task_guid"):
+                            ok = feishu_task_client.complete_task_by_guid(matched_todo["feishu_task_guid"])
+                            if not ok:
+                                logger.warning("飞书任务完成失败: %s", matched_todo.get("feishu_task_guid"))
+                        elif feishu_task_client.is_enabled():
+                            result = feishu_task_client.complete_task_by_summary(matched_todo.get("content") or popped["content"])
+                            if result.get("need_confirm") and result.get("candidates"):
+                                state["feishu_task_pending"] = {
+                                    "action": "complete",
+                                    "query": matched_todo.get("content") or popped["content"],
+                                    "candidates": result["candidates"],
+                                    "created": _now_str(),
+                                }
 
         if not completed_names and not checkin_names:
             return {"success": False, "reply": "没有找到对应序号的待办"}
@@ -570,6 +614,16 @@ def complete(params, state, ctx):
             if checkin_names:
                 names = "、".join(f"「{c[:20]}」" for c in checkin_names)
                 parts.append(f"今日打卡 {len(checkin_names)} 条 🔁\n{names}")
+
+            pending = state.get("feishu_task_pending") or {}
+            cands = pending.get("candidates") or []
+            if cands:
+                lines = ["\n飞书任务里找到了多个匹配项，请回复我序号确认完成哪一个："]
+                for i, c in enumerate(cands[:5], 1):
+                    lines.append(f"  {i}. {c.get('summary', '')}")
+                lines.append("回复示例：完成飞书任务 2")
+                parts.append("\n".join(lines))
+
             logger.info("批量: done=%d, checkin=%d", len(completed_names), len(checkin_names))
             return {"success": True, "reply": "\n".join(parts), "state_updates": {"todos": todos}}
         return {"success": False, "reply": "写入 Todo.md 失败"}
@@ -607,14 +661,36 @@ def complete(params, state, ctx):
 
             if matched_todo:
                 todos.remove(matched_todo)
+                if matched_todo.get("feishu_task_guid"):
+                    ok = feishu_task_client.complete_task_by_guid(matched_todo["feishu_task_guid"])
+                    if not ok:
+                        logger.warning("飞书任务完成失败: %s", matched_todo.get("feishu_task_guid"))
+                elif feishu_task_client.is_enabled():
+                    result = feishu_task_client.complete_task_by_summary(matched_todo.get("content") or item["content"])
+                    if result.get("need_confirm") and result.get("candidates"):
+                        state["feishu_task_pending"] = {
+                            "action": "complete",
+                            "query": matched_todo.get("content") or item["content"],
+                            "candidates": result["candidates"],
+                            "created": _now_str(),
+                        }
 
             new_text = _rebuild_todo_md(doing, done)
             ok = ctx.IO.write_text(ctx.todo_file, new_text)
             if ok:
                 logger.info("已完成: %s", item["content"])
+                pending = state.get("feishu_task_pending") or {}
+                cands = pending.get("candidates") or []
+                extra = ""
+                if cands:
+                    lines = ["\n飞书任务里找到了多个匹配项，请回复我序号确认完成哪一个："]
+                    for i, c in enumerate(cands[:5], 1):
+                        lines.append(f"  {i}. {c.get('summary', '')}")
+                    lines.append("回复示例：完成飞书任务 2")
+                    extra = "\n".join(lines)
                 return {
                     "success": True,
-                    "reply": f"已完成「{item['content']}」✅",
+                    "reply": f"已完成「{item['content']}」✅{extra}",
                     "state_updates": {"todos": todos},
                 }
             return {"success": False, "reply": "写入 Todo.md 失败"}
@@ -872,6 +948,172 @@ def check_reminders(state, ctx=None, todo_file=None):
 
 
 
+def _find_todo_by_id(todos, tid):
+    """在 state.todos 中按 ID 精确匹配"""
+    for t in todos:
+        if t.get("id") == tid:
+            return t
+    return None
+
+
+def modify(params, state, ctx):
+    """
+    修改待办事项（内容、截止日期、提醒时间）。
+    会自动同步修改飞书任务。
+
+    params:
+        id: str — 待办 ID（必填）
+        content: str — 可选，新内容
+        due_date: str — 可选，新截止日期 YYYY-MM-DD
+        remind_at: str — 可选，新提醒时间 HH:MM 或 YYYY-MM-DD HH:MM
+    """
+    tid = (params.get("id") or "").strip()
+    if not tid:
+        return {"success": False, "reply": "请提供待办 ID"}
+
+    _migrate_reminders_to_todos(state, ctx, ctx.todo_file)
+    todos = state.get("todos", [])
+    todo = _find_todo_by_id(todos, tid)
+    if not todo:
+        return {"success": False, "reply": f"未找到 ID 为「{tid}」的待办"}
+
+    # 记录旧内容用于查找 Todo.md
+    old_content = todo["content"]
+    
+    # 更新字段
+    changed = False
+    
+    if "content" in params:
+        new_content = params["content"].strip()
+        if new_content and new_content != todo["content"]:
+            todo["content"] = new_content
+            changed = True
+        
+    if "due_date" in params:
+        new_due = params["due_date"].strip()
+        if new_due != todo.get("due_date", ""):
+            todo["due_date"] = new_due
+            changed = True
+
+    if "remind_at" in params:
+        new_remind = params["remind_at"].strip()
+        if new_remind != todo.get("remind_at", ""):
+            todo["remind_at"] = new_remind
+            changed = True
+
+    if not changed:
+        return {"success": True, "reply": "内容未发生变化"}
+
+    # 1. 同步飞书
+    task_guid = todo.get("feishu_task_guid")
+    if task_guid:
+        due_ts = 0
+        remind = todo.get("remind_at", "")
+        due_d = todo.get("due_date", "")
+        if remind and len(remind) > 5:
+            try:
+                dt = datetime.strptime(remind, "%Y-%m-%d %H:%M")
+                dt = dt.replace(tzinfo=BEIJING_TZ)
+                due_ts = int(dt.timestamp() * 1000)
+            except ValueError: pass
+        elif due_d:
+            try:
+                dt = datetime.strptime(due_d + " 23:59:59", "%Y-%m-%d %H:%M:%S")
+                dt = dt.replace(tzinfo=BEIJING_TZ)
+                due_ts = int(dt.timestamp() * 1000)
+            except ValueError: pass
+        
+        feishu_task_client.update_task(
+            task_guid, 
+            summary=todo["content"], 
+            due_timestamp_ms=due_ts if due_ts > 0 else -1
+        )
+
+    # 2. 更新 Todo.md
+    try:
+        text = ctx.IO.read_text(ctx.todo_file)
+        if text:
+            doing, done = _parse_todo_md(text)
+            found_md = False
+            for item in doing:
+                if item["content"] == old_content:
+                    # 重新构建这一行
+                    item["content"] = todo["content"]
+                    item["due_date"] = todo["due_date"]
+                    item["remind_at"] = todo["remind_at"]
+                    item["raw"] = _build_todo_line(todo)
+                    found_md = True
+                    break
+            
+            if found_md:
+                new_text = _rebuild_todo_md(doing, done)
+                ctx.IO.write_text(ctx.todo_file, new_text)
+    except Exception as e:
+        logger.exception("更新 Todo.md 失败: %s", e)
+
+    return {
+        "success": True, 
+        "reply": f"已修改待办「{todo['content']}」", 
+        "state_updates": {"todos": todos}
+    }
+
+
+def delete(params, state, ctx):
+    """
+    删除待办事项（支持 ID 或关键词）。
+    会自动同步删除飞书任务。
+
+    params:
+        id: str — 待办 ID
+        keyword: str — 用于匹配内容的关键词（如果不提供 ID）
+    """
+    tid = (params.get("id") or "").strip()
+    keyword = (params.get("keyword") or "").strip().lower()
+
+    if not tid and not keyword:
+        return {"success": False, "reply": "请提供要删除的待办 ID 或关键词"}
+
+    _migrate_reminders_to_todos(state, ctx, ctx.todo_file)
+    todos = state.get("todos", [])
+    
+    target_todo = None
+    if tid:
+        target_todo = _find_todo_by_id(todos, tid)
+    elif keyword:
+        target_todo = _find_todo_by_content(todos, keyword)
+
+    if not target_todo:
+        return {"success": False, "reply": "未找到匹配的待办"}
+
+    todo_content = target_todo["content"]
+    task_guid = target_todo.get("feishu_task_guid")
+
+    # 1. 同步删除飞书任务
+    if task_guid:
+        feishu_task_client.delete_task(task_guid)
+
+    # 2. 从 state.todos 移除
+    todos.remove(target_todo)
+
+    # 3. 从 Todo.md 移除
+    try:
+        text = ctx.IO.read_text(ctx.todo_file)
+        if text:
+            doing, done = _parse_todo_md(text)
+            new_doing = [item for item in doing if item["content"] != todo_content]
+            if len(new_doing) < len(doing):
+                new_text = _rebuild_todo_md(new_doing, done)
+                ctx.IO.write_text(ctx.todo_file, new_text)
+    except Exception as e:
+        logger.exception("从 Todo.md 删除失败: %s", e)
+
+    return {
+        "success": True,
+        "reply": f"已删除待办「{todo_content}」",
+        "state_updates": {"todos": todos}
+    }
+
+
 def remind_cancel(params, state, ctx):
     """取消循环待办（清除循环标记）
 
@@ -926,5 +1168,7 @@ SKILL_REGISTRY = {
     "todo.add": add,
     "todo.done": complete,
     "todo.list": list_todos,
+    "todo.modify": modify,
+    "todo.delete": delete,
     "todo.remind_cancel": remind_cancel,
 }

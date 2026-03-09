@@ -188,7 +188,41 @@ class UserContext:
         try:
             if os.path.exists(self.user_config_file):
                 with open(self.user_config_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    config = json.load(f)
+
+                changed = False
+                channel = config.get("channel")
+                if not channel:
+                    if self.user_id.startswith("tg_"):
+                        config["channel"] = "telegram"
+                        channel = "telegram"
+                        changed = True
+                    elif self.user_id.startswith("fs_"):
+                        config["channel"] = "feishu"
+                        channel = "feishu"
+                        changed = True
+                    else:
+                        config["channel"] = "wework"
+                        channel = "wework"
+                        changed = True
+
+                if channel == "telegram" and not config.get("telegram_chat_id") and self.user_id.startswith("tg_"):
+                    config["telegram_chat_id"] = self.user_id[3:]
+                    changed = True
+
+                if channel == "feishu" and not config.get("feishu_open_id") and self.user_id.startswith("fs_"):
+                    config["feishu_open_id"] = self.user_id[3:]
+                    changed = True
+
+                if changed:
+                    try:
+                        os.makedirs(os.path.dirname(self.user_config_file), exist_ok=True)
+                        with open(self.user_config_file, "w", encoding="utf-8") as wf:
+                            json.dump(config, wf, ensure_ascii=False, indent=2)
+                    except Exception:
+                        logger.exception("[UserContext] 回填 user_config 字段失败 %s", self.user_id)
+
+                return config
         except Exception as e:
             logger.error("[UserContext] 读取 user_config 失败 %s: %s", self.user_id, e)
         return {}
