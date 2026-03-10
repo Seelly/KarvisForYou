@@ -16,16 +16,17 @@ from datetime import datetime, timedelta
 
 import requests
 
-import brain
-import channel_router
+from core import engine as brain
+from channel import router as channel_router
 from config import (
     COMPANION_SILENT_HOURS, COMPANION_INTERVAL_HOURS,
     COMPANION_MAX_DAILY, COMPANION_RECENT_HOURS,
     WEATHER_API_KEY, WEATHER_CITY,
 )
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from infra.shared import executor as _shared_executor
 from memory import read_state_cached, write_state_and_update_cache
-import prompts
+import prompt.templates as prompts
 
 logger = get_logger(__name__)
 
@@ -56,12 +57,7 @@ def build_time_capsule(ctx) -> dict:
 
     # 并发读取
     results = {}
-    try:
-        executor = brain._executor
-    except AttributeError:
-        executor = ThreadPoolExecutor(max_workers=4)
-
-    futures = {k: executor.submit(ctx.IO.read_text, v[1]) for k, v in files_to_read.items()}
+    futures = {k: _shared_executor.submit(ctx.IO.read_text, v[1]) for k, v in files_to_read.items()}
 
     for k, fut in futures.items():
         try:

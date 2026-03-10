@@ -1,105 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-KarvisForAll 记忆管理（多用户版）
-缓存按 user_id 分区，所有函数接收 UserContext。
+对话窗口管理 + 长期记忆更新模块。
+
+包含：
+- 对话消息的格式化、追加和压缩
+- memory.md 的增量更新（apply_memory_updates）
 """
-import time
-import os
-import copy
-import threading
 from datetime import datetime
 
-from config import RECENT_MESSAGES_LIMIT, PROMPT_CACHE_TTL, STATE_CACHE_TTL
-from log_utils import BEIJING_TZ, get_logger
-from storage import create_storage
-import json as _json
+from config import RECENT_MESSAGES_LIMIT
+from infra.logging import BEIJING_TZ, get_logger
+from memory.prompt_cache import get_prompt_cache
 
 logger = get_logger(__name__)
-
-
-# ============ Prompt 缓存（按 file_path，多用户天然隔离）============
-
-_TMP_CACHE_DIR = "/tmp/karvis_prompts"
-
-class PromptCache:
-    """Memory 文件缓存：内存 → /tmp 磁盘 → 本地文件（三级缓存）"""
-
-    def __init__(self):
-        self._cache = {}
-        self._lock = threading.Lock()
-        os.makedirs(_TMP_CACHE_DIR, exist_ok=True)
-
-    def _tmp_path(self, file_path):
-        safe = file_path.replace("/", "_").replace(" ", "_").replace(os.sep, "_")
-        return os.path.join(_TMP_CACHE_DIR, safe)
-
-    def get(self, file_path, io=None):
-        """读取文件内容（三级缓存）。io: 可选的存储 IO 对象，用于 L3 回源读取。"""
-        now = time.time()
-
-        # 1. 内存缓存
-        cached = self._cache.get(file_path)
-        if cached and cached["expire_time"] > now:
-            return cached["content"]
-
-        # 2. /tmp 磁盘缓存
-        tmp_file = self._tmp_path(file_path)
-        try:
-            if os.path.exists(tmp_file):
-                mtime = os.path.getmtime(tmp_file)
-                if now - mtime < PROMPT_CACHE_TTL:
-                    with open(tmp_file, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    with self._lock:
-                        self._cache[file_path] = {"content": content, "expire_time": now + PROMPT_CACHE_TTL}
-                    return content
-        except Exception as e:
-            logger.debug("读取 /tmp 磁盘缓存失败: %s", e)
-            pass
-
-        # 3. 通过 IO 对象回源读取
-        if io is None:
-            io = create_storage("local")
-        content = io.read_text(file_path)
-        if content is not None:
-            with self._lock:
-                self._cache[file_path] = {"content": content, "expire_time": now + PROMPT_CACHE_TTL}
-            try:
-                with open(tmp_file, "w", encoding="utf-8") as f:
-                    f.write(content)
-            except Exception as e:
-                logger.debug("写入 /tmp 磁盘缓存失败: %s", e)
-                pass
-        return content or ""
-
-    def invalidate(self, file_path=None):
-        """清除缓存（全部或指定文件）"""
-        with self._lock:
-            if file_path:
-                self._cache.pop(file_path, None)
-                try:
-                    tmp_file = self._tmp_path(file_path)
-                    if os.path.exists(tmp_file):
-                        os.remove(tmp_file)
-                except Exception as e:
-                    logger.debug("删除 /tmp 缓存文件失败: %s", e)
-                    pass
-            else:
-                self._cache.clear()
-                try:
-                    for f in os.listdir(_TMP_CACHE_DIR):
-                        os.remove(os.path.join(_TMP_CACHE_DIR, f))
-                except Exception as e:
-                    logger.debug("清除 /tmp 缓存目录失败: %s", e)
-                    pass
-
-
-_prompt_cache = PromptCache()
-
-
-def load_memory(ctx):
-    """加载某个用户的 memory.md"""
-    return _prompt_cache.get(ctx.memory_file, io=ctx.IO)
 
 
 # ============ 对话窗口管理 ============
@@ -266,77 +179,6 @@ def apply_memory_updates(updates, ctx):
         ok = ctx.IO.write_text(memory_file, memory_text)
         if ok:
             logger.info("[记忆] memory.md 已更新 (%s): %d 条", ctx.user_id, len(updates))
-            _prompt_cache.invalidate(memory_file)
+            get_prompt_cache().invalidate(memory_file)
         else:
             logger.error("[记忆] memory.md 写入失败 (%s)", ctx.user_id)
-
-
-# ============ State 缓存（按 user_id 分区）============
-
-# {user_id: {"data": dict, "expire_time": float}}
-_state_cache = {}
-_state_lock = threading.Lock()
-
-
-def read_state_cached(ctx):
-    """读取某个用户的 state（带缓存）。"""
-    uid = ctx.user_id
-    now = time.time()
-
-    # 1. 内存缓存
-    with _state_lock:
-        cached = _state_cache.get(uid)
-        if cached and cached["data"] is not None and cached["expire_time"] > now:
-            logger.debug("[State] 命中内存缓存 (%s)", uid)
-            return copy.deepcopy(cached["data"])
-
-    # 2. /tmp 磁盘缓存
-    tmp_file = os.path.join(_TMP_CACHE_DIR, f"_state_{uid}.json")
-    try:
-        if os.path.exists(tmp_file):
-            mtime = os.path.getmtime(tmp_file)
-            if now - mtime < STATE_CACHE_TTL:
-                with open(tmp_file, "r", encoding="utf-8") as f:
-                    data = _json.load(f)
-                with _state_lock:
-                    _state_cache[uid] = {"data": data, "expire_time": now + STATE_CACHE_TTL}
-                logger.debug("[State] 命中 /tmp 缓存 (%s)", uid)
-                return copy.deepcopy(data)
-    except Exception as e:
-        logger.debug("读取 /tmp state 缓存失败: %s", e)
-        pass
-
-    # 3. 通过 IO 回源读取
-    data = ctx.IO.read_json(ctx.state_file) or {}
-    _update_state_cache(uid, data)
-    logger.debug("[State] 从文件读取 (%s)", uid)
-    return copy.deepcopy(data)
-
-
-def _update_state_cache(uid, state):
-    """更新某用户 state 的内存和 /tmp 缓存"""
-    now = time.time()
-    with _state_lock:
-        _state_cache[uid] = {"data": state, "expire_time": now + STATE_CACHE_TTL}
-    try:
-        tmp_file = os.path.join(_TMP_CACHE_DIR, f"_state_{uid}.json")
-        os.makedirs(_TMP_CACHE_DIR, exist_ok=True)
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            _json.dump(state, f, ensure_ascii=False)
-    except Exception as e:
-        logger.debug("写入 /tmp state 缓存失败: %s", e)
-        pass
-
-
-def write_state_and_update_cache(state, ctx):
-    """写入某用户的 state 并更新缓存"""
-    ctx.IO.write_json(ctx.state_file, state)
-    _update_state_cache(ctx.user_id, state)
-
-
-def invalidate_all_caches():
-    """清除所有缓存（定时任务用）"""
-    _prompt_cache.invalidate()
-    with _state_lock:
-        _state_cache.clear()
-    logger.info("[Memory] 全部缓存已清除")

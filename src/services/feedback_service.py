@@ -8,11 +8,11 @@ import threading
 import uuid
 from datetime import datetime
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
 
 logger = get_logger(__name__)
 
-from user_context import SYSTEM_DIR
+from infra.paths import SYSTEM_DIR
 
 FEEDBACKS_FILE = os.path.join(SYSTEM_DIR, "feedbacks.json")
 _feedback_lock = threading.Lock()

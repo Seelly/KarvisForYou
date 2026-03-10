@@ -18,7 +18,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import TENCENT_APPID, TENCENT_SECRET_ID, TENCENT_SECRET_KEY
-from log_utils import get_logger
+from infra.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -5,7 +5,7 @@ Web 查看令牌 Skill
 """
 import os
 
-from log_utils import get_logger
+from infra.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -15,7 +15,7 @@ def generate_web_token(params, state, ctx):
     生成 Web 查看令牌并返回带 token 的 URL。
     用户在企微中说"给我查看链接"、"我要看我的数据"时触发。
     """
-    from user_context import generate_token
+    from services.token_service import generate_token
 
     user_id = ctx.user_id
     logger.info("为用户 %s 生成 Web 访问令牌", user_id)

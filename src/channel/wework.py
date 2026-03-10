@@ -26,9 +26,10 @@ from config import (
     WEWORK_TOKEN, ENCODING_AES_KEY,
     ADMIN_USER_ID,
 )
-from log_utils import get_logger
+from web.gateway import is_duplicate_msg
+from infra.logging import get_logger
 from models import MediaResult, ParseResult
-from wework_crypto import WXBizMsgCrypt
+from infra.crypto import WXBizMsgCrypt
 
 logger = get_logger(__name__)
 
@@ -235,7 +236,6 @@ class WeWorkChannel(IMChannel):
                     logger.info("[企微] user=%s, type=%s, id=%s", user_id, msg["msg_type"], msg_id)
 
                     # 消息去重（通过 gateway 模块的 is_duplicate_msg）
-                    from gateway import is_duplicate_msg
                     if msg_id and is_duplicate_msg(msg_id):
                         return "success"
 

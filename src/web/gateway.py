@@ -15,17 +15,18 @@ import os
 import time
 from datetime import datetime
 
-import brain
-import channel_router
+from core import engine as brain
+from channel import router as channel_router
 from config import MSG_CACHE_EXPIRE_SECONDS
-from log_utils import get_logger, BEIJING_TZ
-from media import extract_url, fetch_link_content, recognize_voice
-from user_context import (
+from infra.logging import get_logger, BEIJING_TZ
+from infra.media import extract_url, fetch_link_content, recognize_voice
+from user import (
     get_or_create_user, get_all_active_users,
     increment_message_count, is_user_suspended,
-    update_user_nickname, generate_token,
+    update_user_nickname,
     DAILY_MESSAGE_LIMIT,
 )
+from services.token_service import generate_token
 
 logger = get_logger(__name__)
 

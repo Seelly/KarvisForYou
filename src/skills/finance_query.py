@@ -5,11 +5,11 @@ Skill: finance.query
 
 V12 移植：handler 签名 (params, state, ctx)，IO 通过 ctx.IO。
 """
-from finance_utils import (
+from integrations.finance import (
     load_finance_data, filter_bills, summarize_bills,
     resolve_time_range, format_period, parse_amount, parse_date
 )
-from log_utils import get_logger
+from infra.logging import get_logger
 
 logger = get_logger(__name__)
 

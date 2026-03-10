@@ -14,8 +14,8 @@ import requests
 from requests.adapters import HTTPAdapter
 
 from config import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_DRIVE_ROOT_FOLDER_TOKEN
-from feishu_drive_io import FeishuDriveIO
-from log_utils import get_logger
+from storage.feishu_drive import FeishuDriveIO
+from infra.logging import get_logger
 
 logger = get_logger(__name__)
 

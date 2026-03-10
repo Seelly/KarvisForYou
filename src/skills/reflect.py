@@ -17,8 +17,10 @@ import random
 from datetime import datetime, timedelta
 
 from config import REFLECT_COOLDOWN_DAYS
-from local_io import LocalFileIO
-from log_utils import BEIJING_TZ, get_logger
+from storage.local import LocalFileIO
+from infra.logging import BEIJING_TZ, get_logger
+from core.llm import call_llm
+import prompt.templates as prompts
 
 logger = get_logger(__name__)
 
@@ -614,9 +616,6 @@ def history(params, state, ctx):
 def _generate_response(question, category, answer_text, state):
     """调用 Flash LLM 生成对深度自问回答的回应"""
     try:
-        from brain import call_llm
-        import prompts
-
         context_parts = [
             f"维度：{category}",
             f"问题：{question}",

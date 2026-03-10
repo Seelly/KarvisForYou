@@ -15,7 +15,10 @@ Skill: weekly.review
 import json
 from datetime import datetime, timedelta
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from core.llm import call_deepseek
+from infra.shared import executor as _executor
+import prompt.templates as prompts
 
 logger = get_logger(__name__)
 
@@ -55,7 +58,6 @@ def execute(params, state, ctx):
         return {"success": True, "reply": f"本周（{period_str}）没有记录，无法生成周报"}
 
     # 2. AI 分析
-    from brain import call_deepseek
     analysis = _ai_analyze_week(data, period_str, dates, call_deepseek)
 
     if not analysis:
@@ -82,7 +84,6 @@ def execute(params, state, ctx):
 
 def _collect_week_data(dates, state, ctx):
     """并发收集 7 天的所有数据"""
-    from concurrent.futures import ThreadPoolExecutor
 
     # 构建要读取的文件列表
     files_to_read = {
@@ -96,15 +97,9 @@ def _collect_week_data(dates, state, ctx):
         files_to_read[f"fun_{d}"] = f"{ctx.fun_notes_dir}/{d}.md"
         files_to_read[f"work_{d}"] = f"{ctx.work_notes_dir}/{d}.md"
 
-    # 并发读取（复用 brain 的全局线程池）
+    # 并发读取（复用全局线程池）
     results = {}
-    try:
-        from brain import _executor
-        executor = _executor
-    except ImportError:
-        executor = ThreadPoolExecutor(max_workers=6)
-
-    futures = {k: executor.submit(ctx.IO.read_text, v) for k, v in files_to_read.items()}
+    futures = {k: _executor.submit(ctx.IO.read_text, v) for k, v in files_to_read.items()}
 
     for k, fut in futures.items():
         try:
@@ -218,7 +213,6 @@ def _extract_decision_stats(text, dates):
 
 def _ai_analyze_week(data, period_str, dates, call_deepseek):
     """调用 AI 分析周数据"""
-    import prompts
 
     parts = [f"分析以下 {period_str} 一周的记录，生成周回顾。"]
 

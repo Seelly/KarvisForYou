@@ -13,7 +13,7 @@ import time
 import lark_oapi as lark
 
 from config import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_TASK_LIST_ID
-from log_utils import get_logger
+from infra.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -21,7 +21,8 @@ from config import (
     TELEGRAM_BOT_TOKEN, TELEGRAM_API_BASE,
     TELEGRAM_ADMIN_CHAT_ID, TELEGRAM_WEBHOOK_SECRET,
 )
-from log_utils import get_logger
+from web.gateway import is_duplicate_msg
+from infra.logging import get_logger
 from models import MediaResult, ParseResult
 
 logger = get_logger(__name__)
@@ -268,7 +269,6 @@ class TelegramChannel(IMChannel):
                 return jsonify({"ok": True})
 
             # 去重
-            from gateway import is_duplicate_msg
             msg_key = f"tg_{msg.get('msg_id', '')}"
             if is_duplicate_msg(msg_key):
                 return jsonify({"ok": True})

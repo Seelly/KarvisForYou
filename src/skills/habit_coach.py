@@ -28,7 +28,7 @@ state.active_experiment 结构：
 """
 from datetime import datetime, timedelta
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
 
 logger = get_logger(__name__)
 

@@ -29,7 +29,9 @@ import json
 import requests
 from datetime import datetime
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+import prompt.templates as prompts
 
 logger = get_logger(__name__)
 
@@ -87,7 +89,6 @@ def journal(params, state, ctx):
 
 def _analyze_voice(asr_text, state):
     """调用 DeepSeek 分析语音文本，提取结构化信息"""
-    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 
     # 从 state 获取上下文
     active_book = state.get("active_book", "")
@@ -101,7 +102,6 @@ def _analyze_voice(asr_text, state):
 
     context_str = "；".join(context_hints) if context_hints else "无特殊上下文"
 
-    import prompts
     prompt = prompts.get("VOICE_USER", asr_text=asr_text, context_str=context_str)
 
     url = f"{DEEPSEEK_BASE_URL}/chat/completions"

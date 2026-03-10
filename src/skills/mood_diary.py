@@ -13,7 +13,10 @@ Skill: mood.generate
 import json
 from datetime import datetime
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from core.llm import call_deepseek
+from infra.shared import executor as _executor
+import prompt.templates as prompts
 
 logger = get_logger(__name__)
 
@@ -39,7 +42,6 @@ def execute(params, state, ctx):
         return {"success": True, "reply": f"今天（{date_str}）还没有记录，无法生成情绪日记"}
 
     # 2. AI 分析情绪
-    from brain import call_deepseek
     analysis = _ai_analyze_mood(data, date_str, call_deepseek, state)
 
     if not analysis:
@@ -86,7 +88,6 @@ def execute(params, state, ctx):
 
 def _collect_mood_data(date_str, state, ctx):
     """并发收集当天所有情绪相关数据"""
-    from concurrent.futures import ThreadPoolExecutor
 
     files_to_read = {
         "quick_notes": ctx.quick_notes_file,
@@ -99,12 +100,7 @@ def _collect_mood_data(date_str, state, ctx):
     }
 
     results = {}
-    try:
-        from brain import _executor
-        futures = {k: _executor.submit(ctx.IO.read_text, v) for k, v in files_to_read.items()}
-    except ImportError:
-        _pool = ThreadPoolExecutor(max_workers=6)
-        futures = {k: _pool.submit(ctx.IO.read_text, v) for k, v in files_to_read.items()}
+    futures = {k: _executor.submit(ctx.IO.read_text, v) for k, v in files_to_read.items()}
 
     for k, fut in futures.items():
         try:
@@ -232,7 +228,6 @@ def _extract_checkin_data(daily_text):
 
 def _ai_analyze_mood(data, date_str, call_deepseek, state=None):
     """调用 AI 分析当天情绪"""
-    import prompts
 
     state = state or {}
 

@@ -26,7 +26,8 @@ from lark_oapi.api.im.v1 import (
 
 from channel.base import IMChannel
 from config import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_ADMIN_OPEN_ID
-from log_utils import get_logger
+from web.gateway import is_duplicate_msg
+from infra.logging import get_logger
 from models import MediaResult, ParseResult
 
 logger = get_logger(__name__)
@@ -297,7 +298,6 @@ class FeishuChannel(IMChannel):
                 return
 
             # 去重
-            from gateway import is_duplicate_msg
             msg_key = f"fs_{msg.get('msg_id', '')}"
             if is_duplicate_msg(msg_key):
                 return

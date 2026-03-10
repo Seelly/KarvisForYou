@@ -14,8 +14,8 @@ Skill: todo.*
 import re
 from datetime import datetime, timedelta, date as _date
 
-from log_utils import BEIJING_TZ, get_logger
-from feishu_task import feishu_task_client
+from infra.logging import BEIJING_TZ, get_logger
+from integrations.feishu_task import feishu_task_client
 
 logger = get_logger(__name__)
 

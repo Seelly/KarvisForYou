@@ -19,9 +19,11 @@ Skill: deep_dive (V3-F16)
 import json
 import requests
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+from infra.shared import executor
+import prompt.templates as prompts
 
 logger = get_logger(__name__)
 
@@ -69,14 +71,6 @@ def dive(params, state, ctx):
 
 def _collect_data(keywords, state, ctx):
     """搜索全历史数据，返回结构化结果"""
-    # 获取线程池
-    try:
-        from brain import _executor
-        executor = _executor
-    except Exception as e:
-        logger.warning("Failed to import brain executor, using fallback: %s", e)
-        executor = ThreadPoolExecutor(max_workers=6)
-
     # 需要搜索的全量文件
     files_to_read = {
         "quick_notes": ctx.quick_notes_file,
@@ -219,7 +213,6 @@ def _search_in_text(text, keywords, source):
 
 def _generate_report(topic, keywords, raw_data, state):
     """调用 LLM 生成深度分析报告"""
-    from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 
     # 组装数据摘要
     entries_text = ""
@@ -239,7 +232,6 @@ def _generate_report(topic, keywords, raw_data, state):
 
     decision_text = "\n".join(raw_data.get("decision_entries", []))
 
-    import prompts
     prompt = prompts.get(
         "DEEP_DIVE_USER",
         topic=topic,

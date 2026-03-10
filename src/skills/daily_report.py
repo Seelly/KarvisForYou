@@ -6,7 +6,10 @@ Skill: daily.generate
 import re
 from datetime import datetime
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from core.llm import call_deepseek
+from infra.shared import executor as _executor
+import prompt.templates as prompts
 
 logger = get_logger(__name__)
 
@@ -32,7 +35,6 @@ def execute(params, state, ctx):
         return {"success": True, "reply": f"今天（{date_str}）还没有记录，无法生成日报"}
 
     # 2. 调用 AI 分析
-    from brain import call_deepseek
     analysis = _ai_analyze(notes, date_str, call_deepseek)
 
     if not analysis:
@@ -56,8 +58,6 @@ def execute(params, state, ctx):
 
 def _collect_today_notes(date_str, ctx):
     """收集当天所有笔记内容（并发读取所有文件）"""
-    from concurrent.futures import ThreadPoolExecutor
-
     # 并发读取所有可能的文件
     files_to_read = {
         "quick_notes": ctx.quick_notes_file,
@@ -68,14 +68,8 @@ def _collect_today_notes(date_str, ctx):
     }
 
     results = {}
-    # 复用 brain 的全局线程池，避免重复创建
-    try:
-        from brain import _executor
-        futures = {key: _executor.submit(ctx.IO.read_text, path) for key, path in files_to_read.items()}
-    except ImportError:
-        # fallback: 创建临时线程池
-        _pool = ThreadPoolExecutor(max_workers=5)
-        futures = {key: _pool.submit(ctx.IO.read_text, path) for key, path in files_to_read.items()}
+    # 复用全局线程池，避免重复创建
+    futures = {key: _executor.submit(ctx.IO.read_text, path) for key, path in files_to_read.items()}
 
     for key, fut in futures.items():
         try:
@@ -120,7 +114,6 @@ def _extract_date_entries(text, date_str):
 def _ai_analyze(notes, date_str, call_deepseek):
     """调用 AI 分析当天笔记"""
     import json
-    import prompts
 
     response = call_deepseek([
         {"role": "system", "content": prompts.DAILY_SYSTEM},

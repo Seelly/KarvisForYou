@@ -12,13 +12,15 @@ V12 移植：handler 签名 (params, state, ctx)，IO 通过 ctx.IO。
 import json
 import calendar
 from datetime import datetime, timedelta
-from finance_utils import (
+from integrations.finance import (
     load_finance_data, parse_date, parse_amount,
     filter_bills, summarize_bills,
     group_snapshots_by_date, calc_snapshot_summary, compare_snapshots,
     format_currency, normalize_date_str
 )
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from core.llm import call_llm
+import prompt.templates as prompts
 
 logger = get_logger(__name__)
 
@@ -258,9 +260,6 @@ def _build_report_context(period_str, bill_summary, prev_summary,
 def _ai_generate_insights(report_ctx):
     """调 LLM 生成财务洞察"""
     try:
-        from brain import call_llm
-        import prompts
-
         ctx_str = json.dumps(report_ctx, ensure_ascii=False, indent=2)
 
         messages = [

@@ -4,7 +4,7 @@ Skill: note.save
 将用户消息保存到 Quick-Notes（存储后端由 storage_mode 决定）。
 支持纯文本和带附件的消息（图片/语音/视频/链接）。
 """
-from log_utils import get_logger
+from infra.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -22,7 +22,8 @@ from config import (
     SCHEDULER_WEEKEND_SHIFT, SCHEDULER_PUSH_MAX_DAILY, SCHEDULER_MIN_PUSH_GAP,
     SERVER_PORT,
 )
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from memory import write_state_and_update_cache
 
 logger = get_logger(__name__)
 
@@ -128,8 +129,7 @@ def _generate_daily_intents(state: dict) -> list:
 # ============ daily_init / scheduler_tick ============
 
 def daily_init(uid: str, ctx) -> dict:
-    """V8: 每日初始化（多用户版）— 生成当天意图队列 + 重置计数器"""
-    from memory import write_state_and_update_cache
+    """每日初始化（多用户版）— 生成当天意图队列 + 重置计数器"""
     # 绕过缓存直接读文件，防止缓存中旧的 _init_date 导致重复初始化
     state = ctx.IO.read_json(ctx.state_file) or {}
     sched = state.setdefault("scheduler", {})
@@ -177,8 +177,7 @@ def daily_init(uid: str, ctx) -> dict:
 
 
 def scheduler_tick(uid: str, ctx) -> dict:
-    """V8: 每 30 分钟心跳（多用户版）— 检查到期意图并执行"""
-    from memory import write_state_and_update_cache
+    """每 30 分钟心跳（多用户版）— 检查到期意图并执行"""
     state = ctx.IO.read_json(ctx.state_file) or {}
     sched = state.setdefault("scheduler", {})
     now = datetime.now(BEIJING_TZ)

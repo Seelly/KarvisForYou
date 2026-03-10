@@ -5,7 +5,9 @@ Skill: book.*
 """
 from datetime import datetime
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from core.llm import call_deepseek
+import prompt.templates as prompts
 
 logger = get_logger(__name__)
 
@@ -184,9 +186,7 @@ def summary(params, state, ctx):
     if not content or not content.strip():
         return {"success": False, "reply": f"没找到《{book}》的笔记"}
 
-    from brain import call_deepseek
     import json
-    import prompts
 
     prompt = prompts.get("BOOK_SUMMARY_USER", book=book, content=content[:3000])
 
@@ -241,9 +241,7 @@ def quotes(params, state, ctx):
     if not content or not content.strip():
         return {"success": False, "reply": f"没找到《{book}》的笔记"}
 
-    from brain import call_deepseek
     import json
-    import prompts
 
     prompt = prompts.get("BOOK_QUOTES_USER", book=book, content=content[:3000])
 

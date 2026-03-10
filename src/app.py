@@ -3,11 +3,10 @@
 Karvis 主入口
 职责：Flask 初始化、路由注册、渠道初始化、调度器启动。
 所有业务逻辑已迁移到独立模块：
-  - gateway.py   — 消息网关
-  - channel/     — IM 渠道实现
-  - scheduler.py — V8 智能调度引擎
-  - proactive.py — 主动推送
-  - media.py     — 语音识别 / URL 抓取
+  - web/gateway.py   — 消息网关
+  - channel/         — IM 渠道实现
+  - core/scheduler.py — V8 智能调度引擎
+  - core/proactive.py — 主动推送
 """
 # 加载 .env 文件（Lite 模式 / 本地开发）
 import os
@@ -24,24 +23,17 @@ from flask import Flask, request
 import json
 import time
 import logging
-import threading
 
-import brain
-import channel_router
-import gateway
+from channel import router as channel_router
+from web import gateway
 from config import (
     ACTIVE_CHANNELS, SERVER_PORT,
     TELEGRAM_BOT_TOKEN, FEISHU_APP_ID,
 )
-from user_context import (
-    get_or_create_user, get_all_active_users,
-    SYSTEM_DIR,
-)
-from log_utils import BEIJING_TZ, get_logger, set_request_id
-from proactive import (
-    build_time_capsule, build_nudge_context,
-    run_nudge_check, run_companion_check, build_weather_context,
-)
+from user import get_or_create_user, get_all_active_users
+from infra.paths import SYSTEM_DIR
+from infra.logging import BEIJING_TZ, get_logger, set_request_id
+from core.system_actions import run_system_action
 
 logger = get_logger(__name__)
 
@@ -72,7 +64,7 @@ logging.getLogger('werkzeug').addFilter(_QuietWebFilter())
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # 注册 Web 路由 Blueprint
-from web_routes import web_bp, api_bp
+from web.routes import web_bp, api_bp
 app.register_blueprint(web_bp, url_prefix="/web")
 app.register_blueprint(api_bp, url_prefix="/api")
 
@@ -117,7 +109,7 @@ def system_endpoint():
 
         # V8: 智能调度引擎
         if action in ("daily_init", "scheduler_tick"):
-            from scheduler import daily_init, scheduler_tick
+            from core.scheduler import daily_init, scheduler_tick
             user_ids = [target_user] if target_user else get_all_active_users()
             results = []
             for uid in user_ids:
@@ -145,7 +137,7 @@ def system_endpoint():
         for uid in user_ids:
             try:
                 ctx, _ = get_or_create_user(uid)
-                result = _run_system_action_for_user(action, data, uid, ctx)
+                result = run_system_action(action, data, uid, ctx)
                 total_results.append({"user_id": uid, **result})
             except Exception as e:
                 logger.error("[/system] 用户 %s 执行 %s 失败: %s", uid, action, e)
@@ -162,175 +154,6 @@ def system_endpoint():
     except Exception as e:
         logger.exception("[/system] 异常: %s", e)
         return json.dumps({"ok": False, "error": str(e)})
-
-
-def _run_system_action_for_user(action, data, uid, ctx):
-    """为单个用户执行系统动作，返回结果 dict"""
-    from memory import read_state_cached, write_state_and_update_cache
-    from datetime import datetime
-    logger.info("[system_action] 开始执行: action=%s, user=%s", action, uid)
-    t0 = time.time()
-
-    if action == "todo_remind":
-        from skills.todo_manage import check_todos
-        state = read_state_cached(ctx) or {}
-        result = check_todos(state, ctx=ctx, todo_file=ctx.todo_file)
-        messages = result.get("messages", [])
-        state_updates = result.get("state_updates", {})
-        if messages:
-            combined = "📋 待办提醒\n\n" + "\n".join(messages)
-            channel_router.send_message(uid, combined)
-        if state_updates:
-            for k, v in state_updates.items():
-                state[k] = v
-            write_state_and_update_cache(state, ctx)
-        return {"ok": True, "sent": len(messages)}
-
-    if action in ("morning_report", "evening_checkin", "daily_report"):
-        context = {}
-        try:
-            todo_content = ctx.IO.read_text(ctx.todo_file)
-            if todo_content:
-                context["todo"] = todo_content[:2000]
-            quick_notes = ctx.IO.read_text(ctx.quick_notes_file)
-            if quick_notes:
-                context["quick_notes"] = quick_notes[:1000]
-        except Exception as e:
-            logger.warning("[/system] [%s] 读取上下文失败: %s", uid, e)
-
-        if action == "morning_report":
-            try:
-                context["time_capsule"] = build_time_capsule(ctx)
-            except Exception as e:
-                logger.warning("[/system] [%s] 时间胶囊读取失败: %s", uid, e)
-            try:
-                weather = build_weather_context()
-                if weather:
-                    context["weather"] = weather
-            except Exception as e:
-                logger.error("[/system] [%s] 天气获取失败: %s", uid, e)
-            try:
-                from skills.decision_track import get_due_decisions
-                _state = read_state_cached(ctx) or {}
-                due_decisions = get_due_decisions(_state)
-                if due_decisions:
-                    context["due_decisions"] = due_decisions
-            except Exception as e:
-                logger.warning("[/system] [%s] 到期决策读取失败: %s", uid, e)
-            try:
-                from skills.habit_coach import check_experiment_expiry, get_experiment_summary_for_review
-                _state = read_state_cached(ctx) or {}
-                expiry_msg = check_experiment_expiry(_state)
-                if expiry_msg:
-                    context["experiment_expired"] = expiry_msg
-                exp_summary = get_experiment_summary_for_review(_state)
-                if exp_summary:
-                    context["active_experiment"] = exp_summary
-            except Exception as e:
-                logger.warning("[/system] [%s] 实验上下文读取失败: %s", uid, e)
-
-        if action in ("morning_report", "evening_checkin"):
-            try:
-                context["nudge"] = build_nudge_context(ctx)
-            except Exception as e:
-                logger.warning("[/system] [%s] nudge 上下文读取失败: %s", uid, e)
-
-        if action == "evening_checkin":
-            try:
-                _state = read_state_cached(ctx) or {}
-                daily_top3 = _state.get("daily_top3", {})
-                today_str = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
-                if daily_top3 and daily_top3.get("date") == today_str:
-                    context["daily_top3"] = daily_top3
-            except Exception as e:
-                logger.warning("[/system] [%s] daily_top3 读取失败: %s", uid, e)
-
-        payload = {
-            "type": "system",
-            "action": action,
-            "user_id": uid,
-            "context": context
-        }
-        result = brain.process(payload, ctx=ctx)
-        reply = result.get("reply") if result else None
-        if reply:
-            channel_router.send_message(uid, reply)
-        return {"ok": True, "has_reply": bool(reply)}
-
-    if action == "reflect_push":
-        from skills.reflect import push as reflect_push
-        state = read_state_cached(ctx) or {}
-        result = reflect_push({}, state, ctx)
-        su = result.get("state_updates", {})
-        if su:
-            state.update(su)
-            write_state_and_update_cache(state, ctx)
-        reply = result.get("reply") if result else None
-        if reply:
-            channel_router.send_message(uid, reply)
-        return {"ok": True, "has_reply": bool(reply)}
-
-    if action == "mood_generate":
-        from skills.mood_diary import execute as mood_execute
-        state = read_state_cached(ctx) or {}
-        today_str = datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
-        scores = state.get("mood_scores", [])
-        if any(s.get("date") == today_str for s in scores):
-            return {"ok": True, "skipped": True}
-        result = mood_execute(data, state, ctx)
-        write_state_and_update_cache(state, ctx)
-        reply = result.get("reply") if result else None
-        if reply:
-            channel_router.send_message(uid, reply)
-        return {"ok": True, "has_reply": bool(reply)}
-
-    if action == "weekly_review":
-        from skills.weekly_review import execute as weekly_execute
-        state = read_state_cached(ctx) or {}
-        result = weekly_execute(data, state, ctx)
-        write_state_and_update_cache(state, ctx)
-        reply = result.get("reply") if result else None
-        if reply:
-            channel_router.send_message(uid, reply)
-        return {"ok": True, "has_reply": bool(reply)}
-
-    if action == "nudge_check":
-        messages = run_nudge_check(ctx)
-        for msg in messages:
-            channel_router.send_message(uid, msg)
-        return {"ok": True, "sent": len(messages)}
-
-    if action == "monthly_review":
-        from skills.monthly_review import execute as monthly_execute
-        state = read_state_cached(ctx) or {}
-        result = monthly_execute(data, state, ctx)
-        write_state_and_update_cache(state, ctx)
-        reply = result.get("reply") if result else None
-        if reply:
-            channel_router.send_message(uid, reply)
-        return {"ok": True, "has_reply": bool(reply)}
-
-    if action == "companion_check":
-        message = run_companion_check(ctx)
-        if message:
-            channel_router.send_message(uid, message)
-        return {"ok": True, "sent": 1 if message else 0}
-
-    if action == "finance_monthly_report":
-        user_cfg = ctx.get_user_config() if hasattr(ctx, "get_user_config") else {}
-        if user_cfg.get("role") != "admin":
-            return {"ok": True, "skipped": True, "reason": "not_admin"}
-        from skills.finance_report import execute as finance_execute
-        state = read_state_cached(ctx) or {}
-        result = finance_execute({}, state, ctx)
-        write_state_and_update_cache(state, ctx)
-        reply = result.get("reply") if result else None
-        if reply:
-            channel_router.send_message(uid, reply)
-        return {"ok": True, "has_reply": bool(reply)}
-
-    logger.warning("[system_action] 未知 action: %s", action)
-    return {"ok": False, "error": f"unknown action: {action}"}
 
 
 @app.route('/', methods=['GET'])
@@ -414,25 +237,25 @@ if __name__ == '__main__':
     if "wework" in ACTIVE_CHANNELS:
         from channel.wework import WeWorkChannel
         wework_ch = WeWorkChannel()
-        channel_router.register_channel(wework_ch)
+        channel_router.register(wework_ch)
         wework_ch.start(app, gateway.handle_message)
 
     # Telegram 渠道
     if "telegram" in ACTIVE_CHANNELS and TELEGRAM_BOT_TOKEN:
         from channel.telegram import TelegramChannel
         tg_ch = TelegramChannel()
-        channel_router.register_channel(tg_ch)
+        channel_router.register(tg_ch)
         tg_ch.start(app, gateway.handle_message)
 
     # 飞书渠道（长连接模式）
     if "feishu" in ACTIVE_CHANNELS and FEISHU_APP_ID:
         from channel.feishu import FeishuChannel
         fs_ch = FeishuChannel()
-        channel_router.register_channel(fs_ch)
+        channel_router.register(fs_ch)
         fs_ch.start(app, gateway.handle_message)
 
     # 启动调度器
-    from scheduler import setup_scheduler
+    from core.scheduler import setup_scheduler
     setup_scheduler()
 
     app.run(host='0.0.0.0', port=SERVER_PORT, threaded=True)

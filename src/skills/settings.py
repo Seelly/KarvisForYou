@@ -3,7 +3,9 @@
 KarvisForAll 对话式设置
 通过自然语言设置昵称、AI 风格、个人信息。
 """
-from log_utils import get_logger
+from infra.logging import get_logger
+from user import update_user_nickname
+from skill_loader import load_skill_registry, get_skill_metadata
 
 logger = get_logger(__name__)
 
@@ -24,7 +26,6 @@ def set_nickname(params, state, ctx):
     ctx.save_user_config(config)
 
     # 同步更新注册表
-    from user_context import update_user_nickname
     update_user_nickname(ctx.user_id, nickname)
 
     logger.info("用户 %s 设置昵称: %s", ctx.user_id, nickname)
@@ -175,7 +176,6 @@ def manage_skills(params, state, ctx):
 
 def _list_skills(ctx):
     """列出用户的所有可见 Skill，分三组：已开启 / 未开启 / 敬请期待"""
-    from skill_loader import load_skill_registry, get_skill_metadata
 
     load_skill_registry()
     metadata = get_skill_metadata()
@@ -266,7 +266,6 @@ def _toggle_skills(ctx, skill_names, disable=True):
         return {"success": False, "reply": f"没听清你要{action_word}哪个功能，再说一次？"}
 
     # 检查 visibility — private 不透露存在，preview 提示敬请期待
-    from skill_loader import load_skill_registry, get_skill_metadata
     load_skill_registry()
     metadata = get_skill_metadata()
 

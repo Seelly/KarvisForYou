@@ -17,8 +17,8 @@ from datetime import datetime
 import requests
 from requests.adapters import HTTPAdapter
 
-from log_utils import BEIJING_TZ, get_logger
-from storage_base import StorageBackend
+from infra.logging import BEIJING_TZ, get_logger
+from storage.base import StorageBackend
 
 logger = get_logger(__name__)
 

@@ -16,7 +16,8 @@ Skill: internal_ops (V3-F10)
 """
 from datetime import datetime, timedelta
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from infra.shared import executor as _executor
 
 logger = get_logger(__name__)
 
@@ -29,7 +30,6 @@ def read_files(params, state, ctx):
         paths: list[str] — 要读取的文件路径列表（相对于 OBSIDIAN_BASE）
         max_chars: int — 每个文件最大返回字符数（默认 1000）
     """
-    from concurrent.futures import ThreadPoolExecutor
 
     paths = params.get("paths", [])
     max_chars = params.get("max_chars", 1000)
@@ -52,14 +52,7 @@ def read_files(params, state, ctx):
         return {"success": False, "reply": "没有合法的文件路径"}
 
     # 并发读取
-    try:
-        from brain import _executor
-        executor = _executor
-    except Exception as e:
-        logger.warning("Failed to import brain executor, using fallback: %s", e)
-        executor = ThreadPoolExecutor(max_workers=4)
-
-    futures = {p: executor.submit(ctx.IO.read_text, p) for p in full_paths}
+    futures = {p: _executor.submit(ctx.IO.read_text, p) for p in full_paths}
 
     results = {}
     for p, fut in futures.items():
@@ -91,7 +84,6 @@ def search_files(params, state, ctx):
         scope: str — 搜索范围："quick_notes" | "archives" | "all"（默认 all）
         max_results: int — 最大返回条数（默认 10）
     """
-    from concurrent.futures import ThreadPoolExecutor
 
     keywords = params.get("keywords", [])
     scope = params.get("scope", "all")
@@ -101,13 +93,6 @@ def search_files(params, state, ctx):
         return {"success": False, "reply": "没有指定搜索关键词"}
 
     keyword_lower = [kw.lower() for kw in keywords]
-
-    try:
-        from brain import _executor
-        executor = _executor
-    except Exception as e:
-        logger.warning("Failed to import brain executor, using fallback: %s", e)
-        executor = ThreadPoolExecutor(max_workers=6)
 
     files_to_read = {}
     if scope in ("quick_notes", "all"):
@@ -122,7 +107,7 @@ def search_files(params, state, ctx):
             files_to_read[f"work_{d}"] = f"{ctx.work_notes_dir}/{d}.md"
             files_to_read[f"fun_{d}"] = f"{ctx.fun_notes_dir}/{d}.md"
 
-    futures = {k: executor.submit(ctx.IO.read_text, v) for k, v in files_to_read.items()}
+    futures = {k: _executor.submit(ctx.IO.read_text, v) for k, v in files_to_read.items()}
     results_text = {}
     for k, fut in futures.items():
         try:

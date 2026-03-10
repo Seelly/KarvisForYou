@@ -18,7 +18,10 @@ import json
 import calendar
 from datetime import datetime, timedelta
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from core.llm import call_deepseek
+from infra.shared import executor as _executor
+import prompt.templates as prompts
 
 logger = get_logger(__name__)
 
@@ -53,7 +56,6 @@ def execute(params, state, ctx):
         return {"success": True, "reply": f"本月（{period_str}）没有记录，无法生成月报"}
 
     # 2. AI 分析
-    from brain import call_deepseek
     analysis = _ai_analyze_month(data, period_str, month_str, dates, call_deepseek)
 
     if not analysis:
@@ -80,7 +82,6 @@ def execute(params, state, ctx):
 
 def _collect_month_data(dates, month_str, state, ctx):
     """并发收集整月数据"""
-    from concurrent.futures import ThreadPoolExecutor
 
     # 构建要读取的文件列表
     files_to_read = {
@@ -113,13 +114,7 @@ def _collect_month_data(dates, month_str, state, ctx):
 
     # 并发读取
     results = {}
-    try:
-        from brain import _executor
-        executor = _executor
-    except ImportError:
-        executor = ThreadPoolExecutor(max_workers=6)
-
-    futures = {k: executor.submit(ctx.IO.read_text, v) for k, v in files_to_read.items()}
+    futures = {k: _executor.submit(ctx.IO.read_text, v) for k, v in files_to_read.items()}
 
     for k, fut in futures.items():
         try:
@@ -292,7 +287,6 @@ def _ai_analyze_month(data, period_str, month_str, dates, call_deepseek):
     if data["notes"]:
         parts.append(f"\n【本月记录】\n{data['notes']}")
 
-    import prompts
     parts.append(prompts.MONTHLY_JSON_FORMAT)
 
     prompt = "\n".join(parts)

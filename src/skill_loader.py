@@ -11,7 +11,7 @@ SKILL_REGISTRY 支持两种格式：
 import os
 import importlib
 
-from log_utils import get_logger
+from infra.logging import get_logger
 
 logger = get_logger(__name__)
 

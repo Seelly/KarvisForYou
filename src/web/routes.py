@@ -12,15 +12,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 from flask import Blueprint, request, jsonify, send_from_directory, redirect, url_for
 
-from user_context import (
-    verify_token, UserContext, get_all_users, update_user_status,
-    SYSTEM_DIR, USAGE_LOG_FILE, DATA_DIR,
-    create_invite_code, get_all_invite_codes, delete_invite_code,
-    create_announcement, get_announcements, delete_announcement,
-    create_feedback, get_feedbacks, reply_feedback,
-)
+from user import UserContext, get_all_users, update_user_status
+from infra.paths import SYSTEM_DIR, USAGE_LOG_FILE, DATA_DIR
+from services.token_service import verify_token
+from services.invite_service import create_invite_code, get_all_invite_codes, delete_invite_code
+from services.announcement_service import create_announcement, get_announcements, delete_announcement
+from services.feedback_service import create_feedback, get_feedbacks, reply_feedback
 from config import ADMIN_TOKEN, LOG_FILE_KARVISFORALL
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
 
 logger = get_logger(__name__)
 
@@ -637,7 +636,7 @@ def api_update_settings(user_id=None):
         # 如果修改了昵称，同步更新注册表
         if "nickname" in data:
             try:
-                from user_context import update_user_nickname
+                from user import update_user_nickname
                 update_user_nickname(user_id, cfg.get("nickname", ""))
             except Exception as e:
                 logger.debug("同步更新昵称失败: %s", e)
@@ -1262,7 +1261,7 @@ def api_admin_user_detail(uid):
 @require_admin
 def api_admin_generate_token(uid):
     """POST /api/admin/users/{uid}/token — 为用户生成 Web 访问令牌"""
-    from user_context import generate_token
+    from services.token_service import generate_token
     data = request.get_json(force=True, silent=True) or {}
     expire_hours = data.get("expire_hours", 24)
 

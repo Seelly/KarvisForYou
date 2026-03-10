@@ -8,14 +8,11 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 
-from log_utils import BEIJING_TZ, get_logger
+from infra.logging import BEIJING_TZ, get_logger
+from infra.paths import TOKENS_FILE
+from config import WEB_TOKEN_EXPIRE_HOURS
 
 logger = get_logger(__name__)
-
-# 复用 user_context 中的系统路径
-from user_context import SYSTEM_DIR
-
-TOKENS_FILE = os.path.join(SYSTEM_DIR, "tokens.json")
 
 _tokens_lock = threading.Lock()
 
@@ -46,7 +43,6 @@ def _write_tokens(data: dict):
 
 def generate_token(user_id: str, expire_hours: int = 24) -> str:
     """为用户生成 Web 访问令牌。返回 token 字符串。"""
-    from config import WEB_TOKEN_EXPIRE_HOURS
     if expire_hours == 24:
         expire_hours = WEB_TOKEN_EXPIRE_HOURS
 

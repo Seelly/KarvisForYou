@@ -3,8 +3,8 @@
 Skill: feishu.task.confirm
 用于在存在多个飞书任务候选时，确认并执行完成操作。
 """
-from log_utils import get_logger
-from feishu_task import feishu_task_client
+from infra.logging import get_logger
+from integrations.feishu_task import feishu_task_client
 
 logger = get_logger(__name__)
 
