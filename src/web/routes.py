@@ -1494,7 +1494,7 @@ def api_user_feedback(user_id=None):
 # Web 页面路由 — /web/*（提供静态 HTML）
 # ============================================================
 
-_STATIC_DIR = os.path.join(os.path.dirname(__file__), "web_static")
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web_static")
 
 
 @web_bp.route("/")
