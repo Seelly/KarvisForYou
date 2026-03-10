@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from log_utils import BEIJING_TZ, get_logger
 from local_io import LocalFileIO
 from storage import create_storage
-from config import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_DRIVE_ROOT_FOLDER_TOKEN
+from config import FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_DRIVE_ROOT_FOLDER_TOKEN, FEISHU_ADMIN_OPEN_ID
 
 logger = get_logger(__name__)
 
@@ -435,7 +435,12 @@ def _init_default_files(ctx: UserContext):
             config_data["telegram_chat_id"] = ctx.user_id[3:]  # 去掉 tg_ 前缀
         # 飞书用户保存 open_id
         elif channel == "feishu":
-            config_data["feishu_open_id"] = ctx.user_id[3:]  # 去掉 fs_ 前缀
+            open_id = ctx.user_id[3:]  # 去掉 fs_ 前缀
+            config_data["feishu_open_id"] = open_id
+            # 若 open_id 与配置的管理员一致，自动提升为 admin
+            if FEISHU_ADMIN_OPEN_ID and open_id == FEISHU_ADMIN_OPEN_ID:
+                config_data["role"] = "admin"
+                logger.info("[UserContext] 飞书用户 %s 匹配管理员 open_id，自动提升为 admin", ctx.user_id)
         ctx.save_user_config(config_data)
 
 

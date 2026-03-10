@@ -196,7 +196,24 @@ class FeishuChannel(IMChannel):
             response = client.im.v1.message_resource.get(request)
             if response.success():
                 data = response.file.read()
-                ct = response.get_header().get("Content-Type", "application/octet-stream")
+                # 获取 Content-Type: 优先从 raw response headers 获取，兼容不同 SDK 版本
+                ct = "application/octet-stream"
+                try:
+                    if hasattr(response, 'raw') and hasattr(response.raw, 'headers'):
+                        ct = response.raw.headers.get("Content-Type", ct)
+                    elif hasattr(response, 'header') and isinstance(response.header, dict):
+                        ct = response.header.get("Content-Type", ct)
+                except Exception:
+                    pass
+                # 如果仍是默认值，尝试根据 file_key 推断
+                if ct == "application/octet-stream":
+                    _ext_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                                ".gif": "image/gif", ".mp3": "audio/mpeg", ".amr": "audio/amr",
+                                ".mp4": "video/mp4", ".pdf": "application/pdf"}
+                    for ext, mime in _ext_map.items():
+                        if file_key.lower().endswith(ext):
+                            ct = mime
+                            break
                 logger.info("[飞书] 媒体下载成功: %d bytes, type=%s", len(data), ct)
                 return data, ct
             else:
