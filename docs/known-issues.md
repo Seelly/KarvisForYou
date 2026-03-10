@@ -1,6 +1,6 @@
 ---
 tags: [karvisforall, issues]
-updated: 2026-02-19
+updated: 2026-03-10
 ---
 
 # KarvisForAll — 已知问题与迭代方向
@@ -18,7 +18,7 @@ updated: 2026-02-19
 | ID | 优先级 | 问题 | 备注 |
 |----|--------|------|------|
 | I-004 | P3 | memory.md 缓存延迟：手动编辑后不会立即生效 | 缓存 TTL 到期后自动刷新。可手动 curl `/system?action=refresh_cache` 立即刷新 |
-| I-005 | P3 | 同一用户极快连发消息可能导致 state 写入竞争 | 已有 per-user Lock 缓解，但极端并发场景仍有理论风险 |
+| I-006 | P2 | 飞书长连接断线重连 | lark-oapi SDK 内置自动重连，但极端网络波动可能需要重启服务 |
 
 ## 已实现的功能
 
@@ -44,7 +44,10 @@ updated: 2026-02-19
 | F-018 | 成本预算监控：月成本计算 + 预算进度条（默认 ¥50）+ 超 80% 红色告警 |
 | F-019 | Prompt 膨胀检测：prompt_tokens 分布直方图（<4K/4-8K/8-12K/>12K）+ >12K 黄色告警 |
 | F-020 | 错误日志聚合：从日志中提取 ERROR/Traceback，按错误签名去重计数，Sentry 风格展示 Top 20 |
-| F-021 | 延迟瀑布图增强：可点击展开查看 input/thinking/skill/reply 详情 |
+| F-022 | 多渠道支持：企微/飞书(长连接)/Telegram，IMChannel 抽象基类 + ChannelRouter 统一调度 |
+| F-023 | 飞书云文档读写（知识库/docx/云盘）+ 待办同步到飞书任务 |
+| F-024 | 按功能分包重构：10 个子包 + Protocol 接口定义，解决循环依赖，模块职责单一 |
+| F-025 | 飞书图片消息理解：支持飞书渠道的图片消息解析和 VL 理解 |
 
 ## 优化迭代方向
 
