@@ -122,7 +122,7 @@ def _call_deepseek(messages, max_tokens=3000, temperature=0.3,
                 tier_label, DEEPSEEK_MODEL, enable_thinking, total_chars, max_tokens)
 
     t0 = _time.time()
-    resp = requests.post(url, headers=headers, json=data, timeout=60)
+    resp = requests.post(url, headers=headers, json=data, timeout=600)
     t1 = _time.time()
 
     if resp.status_code == 200:
@@ -157,7 +157,7 @@ def _call_qwen_flash(messages, max_tokens=500, temperature=0.3):
                 QWEN_MODEL, total_chars, max_tokens)
 
     t0 = _time.time()
-    resp = requests.post(url, headers=headers, json=data, timeout=30)
+    resp = requests.post(url, headers=headers, json=data, timeout=300)
     t1 = _time.time()
 
     if resp.status_code == 200:
@@ -216,7 +216,7 @@ def call_qwen_vl(image_base64, prompt=None):
 
     t0 = _time.time()
     try:
-        resp = requests.post(url, headers=headers, json=data, timeout=60)
+        resp = requests.post(url, headers=headers, json=data, timeout=600)
         t1 = _time.time()
 
         if resp.status_code == 200:
